@@ -564,9 +564,87 @@ header p{
     box-shadow:0 15px 50px rgba(0,0,0,.12);
   }
 }
+
+.photo-zone{
+  margin:10px 0 12px;
+  padding:12px;
+  border:1px solid var(--line);
+  border-radius:14px;
+  background:#fafaff;
+}
+
+.photo-preview{
+  display:none;
+  width:100%;
+  max-height:330px;
+  object-fit:contain;
+  border-radius:12px;
+  margin-top:10px;
+  background:#111;
+}
+
+.ocr-progress{
+  margin-top:9px;
+  font-size:12px;
+  color:var(--muted);
+  min-height:18px;
+}
+
+.ocr-lines{
+  display:flex;
+  gap:7px;
+  flex-wrap:wrap;
+  margin-top:9px;
+}
+
+.ocr-line{
+  border:1px solid var(--line);
+  background:#fff;
+  color:var(--text);
+  border-radius:999px;
+  padding:7px 10px;
+  font-size:12px;
+  font-weight:700;
+}
+
+.photo-results{
+  display:grid;
+  gap:10px;
+  margin-top:10px;
+}
+
+.photo-result{
+  border:1px solid var(--line);
+  border-radius:14px;
+  padding:10px;
+  background:#fff;
+}
+
+.photo-result-main{
+  display:flex;
+  gap:10px;
+  align-items:flex-start;
+}
+
+.photo-result img{
+  width:62px;
+  height:88px;
+  object-fit:cover;
+  border-radius:8px;
+  background:#ececf3;
+  flex:0 0 auto;
+}
+
+.photo-result-title{
+  font-weight:800;
+  line-height:1.25;
+  margin-bottom:4px;
+}
+
 </style>
 
 <script type="text/javascript" src="https://unpkg.com/@zxing/browser@latest"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 </head>
 
 <body>
@@ -766,17 +844,37 @@ header p{
 Scannez l'EAN : l'application tente ensuite de retrouver automatiquement le DVD dans le catalogue BnF.
 </div>
 
+<div class="photo-zone">
+  <strong>1. Photographiez la jaquette avant</strong>
+  <div class="meta" style="margin-top:5px">
+    L'application lit le titre sur la photo, puis cherche des films correspondants.
+  </div>
+
+  <input id="coverPhotoInput"
+         type="file"
+         accept="image/*"
+         capture="environment"
+         style="display:none"
+         onchange="handleCoverPhoto(this.files && this.files[0])">
+
+  <button class="primary"
+          onclick="document.getElementById('coverPhotoInput').click()"
+          style="margin-top:10px">
+    📷 Photographier la jaquette
+  </button>
+
+  <img id="coverPhotoPreview" class="photo-preview" alt="Jaquette photographiée">
+
+  <div id="ocrProgress" class="ocr-progress"></div>
+  <div id="ocrLines" class="ocr-lines"></div>
+  <div id="photoResults" class="photo-results"></div>
+</div>
+
+<div class="meta" style="margin:8px 0">
+  2. Le code-barres est conservé comme référence produit.
+</div>
+
 <div id="lookupStatus" class="lookup-status"></div>
-
-<div id="lookupSummary" class="lookup-summary" style="display:none"></div>
-<div id="lookupCandidates" class="lookup-candidates"></div>
-
-<button id="webSearchButton"
-        class="secondary"
-        onclick="searchEANOnWeb()"
-        style="display:none;margin-bottom:10px;">
-  🔎 Recherche web manuelle
-</button>
 
 <input id="eanInput"
        inputmode="numeric"
@@ -929,16 +1027,8 @@ function closeScanner(){
   currentLookup = null;
 
   const lookupStatus = document.getElementById("lookupStatus");
-  const lookupCandidates = document.getElementById("lookupCandidates");
-  const lookupSummary = document.getElementById("lookupSummary");
-  const webSearchButton = document.getElementById("webSearchButton");
   if(lookupStatus) lookupStatus.textContent = "";
-  if(lookupCandidates) lookupCandidates.innerHTML = "";
-  if(lookupSummary){
-    lookupSummary.style.display = "none";
-    lookupSummary.textContent = "";
-  }
-  if(webSearchButton) webSearchButton.style.display = "none";
+  resetLookupUI();
 }
 
 
@@ -976,7 +1066,7 @@ function addDVD(){
     year: currentLookup?.confirmed ? (currentLookup.year || "") : "",
     creator: currentLookup?.confirmed ? (currentLookup.creator || "") : "",
     publisher: currentLookup?.confirmed ? (currentLookup.publisher || "") : "",
-    source: currentLookup?.confirmed ? (currentLookup.source || "") : "manuel",
+    source: currentLookup?.confirmed ? (currentLookup.source || "photo") : "manuel",
     boxId:box.id,
     position:existing.length+1,
     status:"sale",
@@ -1449,81 +1539,281 @@ function renderAll(){
 
 
 
+
 let currentLookup = null;
 let currentCandidates = [];
-
-const LOOKUP_CACHE_KEY = "dvdstock_lookup_cache_v2";
-
-function loadLookupCache(){
-  try{
-    return JSON.parse(localStorage.getItem(LOOKUP_CACHE_KEY) || "{}");
-  }catch(e){
-    return {};
-  }
-}
-
-function saveLookupCache(cache){
-  try{
-    localStorage.setItem(LOOKUP_CACHE_KEY, JSON.stringify(cache));
-  }catch(e){}
-}
-
-function normalizeTitle(value){
-  return String(value || "")
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
-}
-
-function firstXmlText(root, localName){
-  const nodes = root.getElementsByTagNameNS("*", localName);
-  if(!nodes || !nodes.length) return "";
-  return (nodes[0].textContent || "").trim();
-}
-
-function allXmlTexts(root, localName){
-  return Array.from(root.getElementsByTagNameNS("*", localName))
-    .map(n => (n.textContent || "").trim())
-    .filter(Boolean);
-}
+let currentPhotoObjectUrl = null;
 
 function resetLookupUI(){
   currentLookup = null;
   currentCandidates = [];
 
   const status = document.getElementById("lookupStatus");
-  const candidates = document.getElementById("lookupCandidates");
-  const summary = document.getElementById("lookupSummary");
-  const webSearchButton = document.getElementById("webSearchButton");
   const titleInput = document.getElementById("titleInput");
+  const preview = document.getElementById("coverPhotoPreview");
+  const progress = document.getElementById("ocrProgress");
+  const lines = document.getElementById("ocrLines");
+  const results = document.getElementById("photoResults");
+  const photoInput = document.getElementById("coverPhotoInput");
 
   if(status) status.textContent = "";
-  if(candidates) candidates.innerHTML = "";
-  if(summary){
-    summary.style.display = "none";
-    summary.textContent = "";
-  }
-  if(webSearchButton) webSearchButton.style.display = "none";
   if(titleInput) titleInput.value = "";
+  if(progress) progress.textContent = "";
+  if(lines) lines.innerHTML = "";
+  if(results) results.innerHTML = "";
+  if(preview){
+    preview.style.display = "none";
+    preview.removeAttribute("src");
+  }
+  if(photoInput) photoInput.value = "";
+
+  if(currentPhotoObjectUrl){
+    URL.revokeObjectURL(currentPhotoObjectUrl);
+    currentPhotoObjectUrl = null;
+  }
 }
 
-function searchEANOnWeb(){
-  const ean = String(document.getElementById("eanInput").value || "").replace(/\D/g, "");
-  if(!ean){
-    alert("Scannez ou saisissez d'abord un EAN.");
+function cleanOcrLine(line){
+  return String(line || "")
+    .replace(/[|_[\]{}<>]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function scoreOcrLine(line){
+  const cleaned = cleanOcrLine(line);
+  if(cleaned.length < 2 || cleaned.length > 55) return -999;
+
+  const lower = cleaned.toLowerCase();
+  const stopWords = [
+    "dvd", "video", "dolby", "digital", "edition", "édition",
+    "zone", "pal", "stereo", "stéréo", "copyright", "studio",
+    "collection", "interdit", "tous publics", "version française",
+    "vf", "vost", "vostfr", "bonus"
+  ];
+
+  if(stopWords.some(w => lower === w || lower.startsWith(w + " "))) return -100;
+
+  const letters = (cleaned.match(/[A-Za-zÀ-ÿ]/g) || []).length;
+  const digits = (cleaned.match(/\d/g) || []).length;
+  const words = cleaned.split(/\s+/).length;
+  const upperLetters = (cleaned.match(/[A-ZÀ-Þ]/g) || []).length;
+  const upperRatio = letters ? upperLetters / letters : 0;
+
+  let score = 0;
+  score += Math.min(letters, 30);
+  if(words >= 1 && words <= 7) score += 14;
+  if(words >= 2 && words <= 5) score += 8;
+  if(upperRatio > 0.55) score += 10;
+  if(digits > letters) score -= 20;
+  if(/[.!?]{2,}/.test(cleaned)) score -= 8;
+
+  return score;
+}
+
+function extractLikelyTitles(text){
+  const rawLines = String(text || "")
+    .split(/\r?\n/)
+    .map(cleanOcrLine)
+    .filter(Boolean);
+
+  const unique = [];
+  const seen = new Set();
+
+  rawLines.forEach(line=>{
+    const key = line.toLowerCase();
+    if(seen.has(key)) return;
+    seen.add(key);
+    const score = scoreOcrLine(line);
+    if(score > 0) unique.push({ line, score });
+  });
+
+  unique.sort((a,b)=>b.score-a.score);
+  return unique.slice(0, 7).map(x=>x.line);
+}
+
+async function handleCoverPhoto(file){
+  if(!file) return;
+
+  const preview = document.getElementById("coverPhotoPreview");
+  const progress = document.getElementById("ocrProgress");
+  const linesBox = document.getElementById("ocrLines");
+  const results = document.getElementById("photoResults");
+
+  linesBox.innerHTML = "";
+  results.innerHTML = "";
+
+  if(currentPhotoObjectUrl) URL.revokeObjectURL(currentPhotoObjectUrl);
+  currentPhotoObjectUrl = URL.createObjectURL(file);
+
+  preview.src = currentPhotoObjectUrl;
+  preview.style.display = "block";
+
+  if(typeof Tesseract === "undefined"){
+    progress.textContent = "Le module de lecture de la photo n'a pas pu se charger.";
     return;
   }
 
-  window.open(
-    "https://www.google.com/search?q=" + encodeURIComponent(`"${ean}" DVD`),
-    "_blank",
-    "noopener,noreferrer"
-  );
+  progress.textContent = "Lecture de la jaquette… la première fois peut prendre quelques secondes.";
+
+  try{
+    const worker = await Tesseract.createWorker("fra+eng", 1, {
+      logger: m => {
+        if(m.status === "recognizing text" && typeof m.progress === "number"){
+          progress.textContent = "Lecture de la jaquette… " + Math.round(m.progress * 100) + " %";
+        }else if(m.status){
+          progress.textContent = "Analyse de la photo…";
+        }
+      }
+    });
+
+    const result = await worker.recognize(file);
+    await worker.terminate();
+
+    const text = result && result.data ? (result.data.text || "") : "";
+    const likelyTitles = extractLikelyTitles(text);
+
+    if(!likelyTitles.length){
+      progress.textContent = "Je n'ai pas réussi à lire un titre clairement. Vous pouvez reprendre la photo ou saisir le titre.";
+      document.getElementById("titleInput").focus();
+      return;
+    }
+
+    progress.textContent = "Touchez le titre qui correspond au DVD :";
+    renderOcrTitleButtons(likelyTitles);
+
+    // Automatically search the strongest OCR line.
+    await searchMovieTitle(likelyTitles[0]);
+  }catch(error){
+    console.error("OCR:", error);
+    progress.textContent =
+      "La lecture de la photo a échoué. Reprenez une photo bien de face, sans reflet, ou saisissez le titre.";
+  }
 }
 
-function chooseCandidate(index){
+function renderOcrTitleButtons(lines){
+  const box = document.getElementById("ocrLines");
+  box.innerHTML = "";
+
+  lines.forEach(line=>{
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "ocr-line";
+    button.textContent = line;
+    button.onclick = ()=>searchMovieTitle(line);
+    box.appendChild(button);
+  });
+}
+
+async function searchMovieTitle(title){
+  title = cleanOcrLine(title);
+  if(!title) return;
+
+  const progress = document.getElementById("ocrProgress");
+  const resultsBox = document.getElementById("photoResults");
+  resultsBox.innerHTML = "";
+  progress.textContent = `Recherche de « ${title} »…`;
+
+  try{
+    // French Wikipedia's MediaWiki API is public and supports CORS.
+    // "film" is added to bias results toward movies.
+    const params = new URLSearchParams({
+      action: "query",
+      format: "json",
+      origin: "*",
+      generator: "search",
+      gsrsearch: `${title} film`,
+      gsrnamespace: "0",
+      gsrlimit: "8",
+      prop: "pageimages|description|extracts",
+      piprop: "thumbnail",
+      pithumbsize: "240",
+      exintro: "1",
+      explaintext: "1",
+      exsentences: "2",
+      redirects: "1"
+    });
+
+    const response = await fetch("https://fr.wikipedia.org/w/api.php?" + params.toString());
+    if(!response.ok) throw new Error("HTTP " + response.status);
+
+    const data = await response.json();
+    const pages = data && data.query && data.query.pages
+      ? Object.values(data.query.pages)
+      : [];
+
+    const moviePages = pages.filter(page=>{
+      const haystack = [
+        page.title || "",
+        page.description || "",
+        page.extract || ""
+      ].join(" ").toLowerCase();
+
+      return /(film|long métrage|long-métrage|cinéma|movie)/i.test(haystack);
+    });
+
+    currentCandidates = (moviePages.length ? moviePages : pages)
+      .slice(0, 6)
+      .map(page=>({
+        title: String(page.title || "").replace(/\s*\(film.*?\)\s*$/i, "").trim(),
+        displayTitle: page.title || "",
+        creator: "",
+        year: ((page.extract || "").match(/\b(19|20)\d{2}\b/) || [""])[0],
+        publisher: "",
+        coverUrl: page.thumbnail && page.thumbnail.source ? page.thumbnail.source : "",
+        source: "Wikipédia",
+        description: page.description || page.extract || "",
+        confirmed: false
+      }))
+      .filter(c=>c.title);
+
+    renderPhotoResults();
+
+    if(currentCandidates.length){
+      progress.textContent =
+        `${currentCandidates.length} film${currentCandidates.length > 1 ? "s" : ""} proposé${currentCandidates.length > 1 ? "s" : ""}. Choisissez le bon.`;
+    }else{
+      progress.textContent =
+        "Aucun film convaincant trouvé. Touchez un autre texte détecté ou saisissez le titre.";
+    }
+  }catch(error){
+    console.error("Recherche film:", error);
+    progress.textContent =
+      "La recherche de film n'a pas répondu. Touchez un autre texte détecté ou saisissez le titre.";
+  }
+}
+
+function renderPhotoResults(){
+  const box = document.getElementById("photoResults");
+  box.innerHTML = "";
+
+  currentCandidates.forEach((candidate, index)=>{
+    const card = document.createElement("div");
+    card.className = "photo-result";
+
+    card.innerHTML = `
+      <div class="photo-result-main">
+        ${candidate.coverUrl
+          ? `<img src="${escapeHtml(candidate.coverUrl)}" alt="" onerror="this.style.display='none'">`
+          : `<div style="width:62px;height:88px;border-radius:8px;background:#ececf3;flex:0 0 auto"></div>`
+        }
+        <div style="min-width:0;flex:1">
+          <div class="lookup-source">${escapeHtml(candidate.source)}</div>
+          <div class="photo-result-title">${escapeHtml(candidate.displayTitle || candidate.title)}</div>
+          ${candidate.year ? `<div class="meta">${escapeHtml(candidate.year)}</div>` : ""}
+          ${candidate.description ? `<div class="meta" style="margin-top:4px">${escapeHtml(candidate.description.slice(0,180))}</div>` : ""}
+        </div>
+      </div>
+      <button class="primary" style="width:100%;margin-top:9px" onclick="choosePhotoCandidate(${index})">
+        ✓ C'est ce DVD
+      </button>
+    `;
+
+    box.appendChild(card);
+  });
+}
+
+function choosePhotoCandidate(index){
   const candidate = currentCandidates[index];
   if(!candidate) return;
 
@@ -1532,287 +1822,30 @@ function chooseCandidate(index){
     confirmed: true
   };
 
-  document.getElementById("titleInput").value = candidate.title || "";
+  document.getElementById("titleInput").value = candidate.title;
   document.getElementById("lookupStatus").textContent =
-    `✓ « ${candidate.title} » retenu. Vous pouvez maintenant ajouter le DVD à la caisse.`;
+    `✓ « ${candidate.title} » retenu. L'EAN restera associé à cette fiche.`;
 
-  document.querySelectorAll(".lookup-candidate button").forEach((button, i)=>{
+  document.querySelectorAll("#photoResults button").forEach((button, i)=>{
     if(i === index){
       button.disabled = true;
       button.textContent = "✓ Sélectionné";
     }else{
       button.disabled = false;
-      button.textContent = "Choisir ce DVD";
+      button.textContent = "✓ C'est ce DVD";
     }
   });
 
   document.getElementById("titleInput").focus();
 }
 
-function renderCandidates(ean, sourceStates){
-  const container = document.getElementById("lookupCandidates");
-  const summary = document.getElementById("lookupSummary");
-  const status = document.getElementById("lookupStatus");
-  const webSearchButton = document.getElementById("webSearchButton");
-
-  container.innerHTML = "";
-
-  if(!currentCandidates.length){
-    summary.style.display = "block";
-    summary.textContent =
-      "Aucune source intégrée n'a donné de résultat exploitable. Vous pouvez saisir le titre vous-même ou lancer une recherche web manuelle.";
-    webSearchButton.style.display = "block";
-    status.textContent = "Aucun résultat fiable trouvé.";
-    document.getElementById("titleInput").focus();
-    return;
-  }
-
-  const normalized = currentCandidates
-    .map(c => normalizeTitle(c.title))
-    .filter(Boolean);
-
-  const uniqueTitles = [...new Set(normalized)];
-  const successfulSources = sourceStates.filter(s => s.ok).length;
-
-  summary.style.display = "block";
-
-  if(successfulSources >= 2 && uniqueTitles.length === 1){
-    summary.textContent =
-      "✓ Les sources consultées donnent le même titre. Vérifiez la jaquette puis choisissez le résultat.";
-  }else if(currentCandidates.length > 1){
-    summary.textContent =
-      "⚠ Les sources ne sont pas parfaitement concordantes. Rien n'est enregistré automatiquement : choisissez le bon DVD.";
-  }else{
-    summary.textContent =
-      "Un seul résultat a été trouvé. Vérifiez-le avant de le choisir.";
-  }
-
-  currentCandidates.forEach((candidate, index)=>{
-    const card = document.createElement("div");
-    card.className = "lookup-candidate";
-
-    const meta = [candidate.year, candidate.creator, candidate.publisher]
-      .filter(Boolean)
-      .join(" · ");
-
-    card.innerHTML = `
-      <div class="lookup-candidate-top">
-        ${candidate.coverUrl
-          ? `<img src="${escapeHtml(candidate.coverUrl)}" alt="" onerror="this.style.display='none'">`
-          : `<div style="width:58px;height:82px;border-radius:8px;background:#ececf3;flex:0 0 auto"></div>`
-        }
-        <div style="min-width:0;flex:1">
-          <div class="lookup-source">${escapeHtml(candidate.source)}</div>
-          <div class="lookup-candidate-title">${escapeHtml(candidate.title || "Titre non renseigné")}</div>
-          ${meta ? `<div class="meta">${escapeHtml(meta)}</div>` : ""}
-        </div>
-      </div>
-      <button class="primary" onclick="chooseCandidate(${index})">Choisir ce DVD</button>
-    `;
-
-    container.appendChild(card);
-  });
-
-  webSearchButton.style.display = "block";
-  status.textContent =
-    `${currentCandidates.length} proposition${currentCandidates.length > 1 ? "s" : ""} trouvée${currentCandidates.length > 1 ? "s" : ""}.`;
-}
-
-async function lookupUPCItemDB(ean){
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8000);
-
-  try{
-    const url =
-      "https://api.upcitemdb.com/prod/trial/lookup?upc=" +
-      encodeURIComponent(ean);
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: { "Accept": "application/json" },
-      signal: controller.signal
-    });
-
-    if(response.status === 429){
-      return { ok:false, source:"UPCitemdb", reason:"quota" };
-    }
-
-    if(!response.ok){
-      return { ok:false, source:"UPCitemdb", reason:"http-" + response.status };
-    }
-
-    const data = await response.json();
-    const item = data && Array.isArray(data.items) ? data.items[0] : null;
-
-    if(!item || !item.title){
-      return { ok:false, source:"UPCitemdb", reason:"not-found" };
-    }
-
-    const image =
-      (Array.isArray(item.images) && item.images.length ? item.images[0] : "") ||
-      item.image || "";
-
-    return {
-      ok:true,
-      source:"UPCitemdb",
-      candidate:{
-        ean,
-        title:String(item.title || "").trim(),
-        creator:"",
-        year:"",
-        publisher:String(item.brand || "").trim(),
-        coverUrl:image,
-        source:"UPCitemdb"
-      }
-    };
-  }catch(error){
-    console.warn("UPCitemdb:", error);
-    return { ok:false, source:"UPCitemdb", reason:"network" };
-  }finally{
-    clearTimeout(timeout);
-  }
-}
-
-async function lookupBNF(ean){
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8000);
-
-  try{
-    const query = `bib.ean adj "${ean}"`;
-    const url =
-      "https://catalogue.bnf.fr/api/SRU" +
-      "?version=1.2" +
-      "&operation=searchRetrieve" +
-      "&query=" + encodeURIComponent(query) +
-      "&recordSchema=dublincore" +
-      "&maximumRecords=1";
-
-    const response = await fetch(url, {
-      method:"GET",
-      mode:"cors",
-      signal:controller.signal
-    });
-
-    if(!response.ok){
-      return { ok:false, source:"BnF", reason:"http-" + response.status };
-    }
-
-    const xmlText = await response.text();
-    const xml = new DOMParser().parseFromString(xmlText, "application/xml");
-
-    if(xml.getElementsByTagName("parsererror").length){
-      return { ok:false, source:"BnF", reason:"parse" };
-    }
-
-    const total = parseInt(firstXmlText(xml, "numberOfRecords") || "0", 10);
-    if(!total){
-      return { ok:false, source:"BnF", reason:"not-found" };
-    }
-
-    const titles = allXmlTexts(xml, "title");
-    const creators = allXmlTexts(xml, "creator");
-    const dates = allXmlTexts(xml, "date");
-    const publishers = allXmlTexts(xml, "publisher");
-
-    const title = titles[0] || "";
-    if(!title){
-      return { ok:false, source:"BnF", reason:"no-title" };
-    }
-
-    const dateText = dates[0] || "";
-    const yearMatch = dateText.match(/\b(19|20)\d{2}\b/);
-
-    return {
-      ok:true,
-      source:"BnF",
-      candidate:{
-        ean,
-        title,
-        creator:creators[0] || "",
-        year:yearMatch ? yearMatch[0] : "",
-        publisher:publishers[0] || "",
-        coverUrl:
-          "https://openapi.bnf.fr/couverture/image/image/recupererImage" +
-          "?EAN=" + encodeURIComponent(ean) +
-          "&couverture=1" +
-          "&taille=originale" +
-          "&largeur=500" +
-          "&hauteur=500",
-        source:"BnF"
-      }
-    };
-  }catch(error){
-    console.warn("BnF:", error);
-    return { ok:false, source:"BnF", reason:"network" };
-  }finally{
-    clearTimeout(timeout);
-  }
-}
-
+// The barcode is now a reference only. It no longer decides the film title.
 async function lookupDVDByEAN(ean){
   ean = String(ean || "").replace(/\D/g, "");
   if(!ean) return;
 
-  const status = document.getElementById("lookupStatus");
-  const titleInput = document.getElementById("titleInput");
-  const candidates = document.getElementById("lookupCandidates");
-  const summary = document.getElementById("lookupSummary");
-
-  currentLookup = null;
-  currentCandidates = [];
-  titleInput.value = "";
-  candidates.innerHTML = "";
-  summary.style.display = "none";
-  status.textContent = "Recherche dans UPCitemdb et la BnF…";
-
-  const cache = loadLookupCache();
-
-  if(cache[ean] && Array.isArray(cache[ean].candidates)){
-    currentCandidates = cache[ean].candidates;
-    renderCandidates(ean, cache[ean].sourceStates || []);
-    status.textContent += " (résultat mémorisé)";
-    return;
-  }
-
-  const results = await Promise.allSettled([
-    lookupUPCItemDB(ean),
-    lookupBNF(ean)
-  ]);
-
-  const sourceStates = results.map((result, index)=>{
-    if(result.status === "fulfilled") return result.value;
-    return {
-      ok:false,
-      source:index === 0 ? "UPCitemdb" : "BnF",
-      reason:"error"
-    };
-  });
-
-  const seen = new Set();
-  currentCandidates = [];
-
-  sourceStates.forEach(state=>{
-    if(!state.ok || !state.candidate || !state.candidate.title) return;
-
-    const key = state.source + "|" + normalizeTitle(state.candidate.title);
-    if(seen.has(key)) return;
-    seen.add(key);
-    currentCandidates.push(state.candidate);
-  });
-
-  cache[ean] = {
-    savedAt: Date.now(),
-    candidates: currentCandidates,
-    sourceStates
-  };
-  saveLookupCache(cache);
-
-  renderCandidates(ean, sourceStates);
-
-  const upcState = sourceStates.find(s => s.source === "UPCitemdb");
-  if(upcState && upcState.reason === "quota"){
-    status.textContent += " UPCitemdb a atteint sa limite gratuite du jour.";
-  }
+  document.getElementById("lookupStatus").textContent =
+    `EAN ${ean} enregistré comme référence. Photographiez la jaquette pour identifier le film.`;
 }
 
 let scannerControls = null;
@@ -1880,6 +1913,7 @@ async function startCamera(){
 
         if(navigator.vibrate) navigator.vibrate(100);
         lookupDVDByEAN(value);
+        setTimeout(()=>document.getElementById("coverPhotoInput").click(), 250);
       }
     );
 
