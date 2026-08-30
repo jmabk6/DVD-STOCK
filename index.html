@@ -1,0 +1,1261 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#5546d9">
+<title>DVD Stock</title>
+
+<style>
+:root{
+  --primary:#5546d9;
+  --primary-soft:#eeeafd;
+  --bg:#f6f7fb;
+  --card:#fff;
+  --text:#17182b;
+  --muted:#777b91;
+  --line:#e8e9f0;
+  --green:#22985c;
+  --orange:#e97828;
+  --red:#d94a4a;
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  background:var(--bg);
+  color:var(--text);
+}
+
+button,input{font:inherit}
+button{cursor:pointer}
+
+.app{
+  max-width:520px;
+  margin:auto;
+  min-height:100vh;
+  background:var(--bg);
+  padding-bottom:88px;
+}
+
+header{
+  position:sticky;
+  top:0;
+  z-index:10;
+  background:rgba(246,247,251,.95);
+  backdrop-filter:blur(12px);
+  padding:18px 18px 12px;
+}
+
+header h1{
+  margin:0;
+  font-size:25px;
+}
+
+header p{
+  margin:5px 0 0;
+  color:var(--muted);
+  font-size:13px;
+}
+
+.screen{
+  display:none;
+  padding:0 16px 20px;
+}
+
+.screen.active{display:block}
+
+.card{
+  background:var(--card);
+  border:1px solid var(--line);
+  border-radius:16px;
+  padding:15px;
+  margin-bottom:12px;
+  box-shadow:0 3px 12px rgba(20,20,40,.035);
+}
+
+.scan{
+  background:linear-gradient(135deg,#6655e8,#4938c8);
+  color:white;
+  padding:30px 20px;
+  border:0;
+  width:100%;
+  border-radius:18px;
+  font-weight:700;
+  font-size:18px;
+}
+
+.scan small{
+  display:block;
+  margin-top:5px;
+  font-weight:400;
+  opacity:.85;
+}
+
+.box-title{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+}
+
+.box-title strong{color:var(--primary)}
+
+.progress{
+  height:7px;
+  background:#ececf3;
+  border-radius:10px;
+  overflow:hidden;
+  margin-top:12px;
+}
+
+.progress div{
+  height:100%;
+  width:0;
+  background:var(--primary);
+}
+
+.stats{
+  display:grid;
+  grid-template-columns:repeat(4,1fr);
+  gap:8px;
+  margin:15px 0;
+}
+
+.stat{
+  background:white;
+  border:1px solid var(--line);
+  border-radius:13px;
+  padding:12px 5px;
+  text-align:center;
+}
+
+.stat strong{
+  display:block;
+  font-size:19px;
+  color:var(--primary);
+}
+
+.stat span{
+  font-size:10px;
+  color:var(--muted);
+}
+
+.section-title{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  margin:20px 2px 10px;
+}
+
+.section-title h2{
+  font-size:16px;
+  margin:0;
+}
+
+.link{
+  color:var(--primary);
+  font-size:12px;
+  font-weight:600;
+}
+
+.search{
+  width:100%;
+  border:1px solid var(--line);
+  border-radius:12px;
+  padding:13px 14px;
+  background:white;
+  outline:none;
+  margin-bottom:12px;
+}
+
+.dvd{
+  display:flex;
+  gap:12px;
+  align-items:center;
+}
+
+.cover{
+  width:48px;
+  height:67px;
+  border-radius:6px;
+  background:#ddd;
+  object-fit:cover;
+  flex:none;
+}
+
+.dvd-info{flex:1;min-width:0}
+
+.dvd-title{
+  font-weight:700;
+  font-size:14px;
+}
+
+.meta{
+  color:var(--muted);
+  font-size:11px;
+  margin-top:3px;
+}
+
+.price{
+  color:var(--green);
+  font-size:13px;
+  font-weight:700;
+  margin-top:5px;
+}
+
+.location{
+  font-size:10px;
+  background:var(--primary-soft);
+  color:var(--primary);
+  border-radius:7px;
+  padding:4px 7px;
+  font-weight:700;
+}
+
+.badge{
+  display:inline-block;
+  font-size:9px;
+  font-weight:700;
+  border-radius:7px;
+  padding:4px 7px;
+  margin-top:5px;
+}
+
+.badge.sale{background:#e8f7ef;color:var(--green)}
+.badge.lot{background:#edf1ff;color:#5365c8}
+.badge.rare{background:#fff0e5;color:var(--orange)}
+.badge.sold{background:#eee;color:#777}
+
+.tabs{
+  display:flex;
+  gap:6px;
+  overflow:auto;
+  margin-bottom:12px;
+}
+
+.tab{
+  border:0;
+  background:white;
+  border-radius:10px;
+  padding:8px 12px;
+  white-space:nowrap;
+  color:var(--muted);
+}
+
+.tab.active{
+  background:var(--primary-soft);
+  color:var(--primary);
+  font-weight:700;
+}
+
+.primary{
+  border:0;
+  background:var(--primary);
+  color:white;
+  border-radius:12px;
+  padding:13px;
+  width:100%;
+  font-weight:700;
+}
+
+.secondary{
+  border:1px solid var(--primary);
+  color:var(--primary);
+  background:white;
+  border-radius:12px;
+  padding:11px;
+  width:100%;
+  font-weight:600;
+  margin-top:8px;
+}
+
+.danger{
+  border:1px solid #efb5b5;
+  color:var(--red);
+  background:white;
+  border-radius:12px;
+  padding:11px;
+  width:100%;
+  margin-top:8px;
+}
+
+.detail-cover{
+  width:130px;
+  height:185px;
+  object-fit:cover;
+  border-radius:10px;
+  background:#ddd;
+}
+
+.detail-top{
+  display:flex;
+  gap:16px;
+  margin-bottom:15px;
+}
+
+.detail-top h2{margin:4px 0 6px;font-size:19px}
+
+.row{
+  display:flex;
+  justify-content:space-between;
+  gap:20px;
+  border-bottom:1px solid var(--line);
+  padding:11px 0;
+  font-size:13px;
+}
+
+.row:last-child{border-bottom:0}
+.row span:first-child{color:var(--muted)}
+.row strong{text-align:right}
+
+.lot-images{
+  display:flex;
+  gap:5px;
+  margin:12px 0;
+}
+
+.mini-cover{
+  width:43px;
+  height:60px;
+  background:#ddd;
+  border-radius:5px;
+  object-fit:cover;
+}
+
+.box-row{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+}
+
+.box-icon{
+  width:42px;
+  height:42px;
+  border-radius:11px;
+  background:var(--primary-soft);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  font-size:21px;
+}
+
+.box-left{
+  display:flex;
+  gap:11px;
+  align-items:center;
+}
+
+.setting{
+  display:flex;
+  justify-content:space-between;
+  padding:15px 3px;
+  border-bottom:1px solid var(--line);
+}
+
+.bottom-nav{
+  position:fixed;
+  bottom:0;
+  left:50%;
+  transform:translateX(-50%);
+  width:min(520px,100%);
+  background:rgba(255,255,255,.96);
+  backdrop-filter:blur(14px);
+  border-top:1px solid var(--line);
+  display:grid;
+  grid-template-columns:repeat(5,1fr);
+  padding:8px 4px calc(8px + env(safe-area-inset-bottom));
+  z-index:20;
+}
+
+.nav{
+  border:0;
+  background:none;
+  color:#8b8da0;
+  font-size:10px;
+  padding:3px;
+}
+
+.nav .icon{
+  display:block;
+  font-size:21px;
+  margin-bottom:2px;
+}
+
+.nav.active{
+  color:var(--primary);
+  font-weight:700;
+}
+
+.modal{
+  position:fixed;
+  inset:0;
+  background:rgba(0,0,0,.45);
+  z-index:100;
+  display:none;
+  align-items:flex-end;
+  justify-content:center;
+}
+
+.modal.active{display:flex}
+
+.modal-content{
+  width:min(520px,100%);
+  background:white;
+  border-radius:22px 22px 0 0;
+  padding:22px 18px 30px;
+}
+
+.modal-content h2{margin-top:0}
+
+.modal input{
+  width:100%;
+  padding:14px;
+  border:1px solid var(--line);
+  border-radius:12px;
+  margin:7px 0;
+}
+
+.empty{
+  text-align:center;
+  padding:35px 15px;
+  color:var(--muted);
+}
+
+@media(min-width:700px){
+  body{padding:25px 0}
+  .app{
+    border-radius:28px;
+    overflow:hidden;
+    min-height:850px;
+    box-shadow:0 15px 50px rgba(0,0,0,.12);
+  }
+}
+</style>
+</head>
+
+<body>
+
+<div class="app">
+
+<header>
+  <h1 id="pageTitle">Scanner</h1>
+  <p id="pageSubtitle">Ajoutez rapidement vos DVD au stock.</p>
+</header>
+
+<!-- 1 ACCUEIL / SCANNER -->
+
+<section id="home" class="screen active">
+
+  <button class="scan" onclick="openScanner()">
+    ▣ &nbsp; Scanner un DVD
+    <small>Code-barres EAN</small>
+  </button>
+
+  <div class="card" style="margin-top:14px">
+    <div class="box-title">
+      <div>
+        <div class="meta">Caisse actuelle</div>
+        <strong id="currentBox">CAISSE 01</strong>
+      </div>
+      <span><b id="boxCount">0</b> DVD</span>
+    </div>
+
+    <div class="progress">
+      <div id="boxProgress"></div>
+    </div>
+
+    <div class="meta" style="text-align:right;margin-top:6px">
+      <span id="progressText">0 / 60 DVD</span>
+    </div>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><strong id="statStock">0</strong><span>DVD en stock</span></div>
+    <div class="stat"><strong id="statSale">0</strong><span>À vendre</span></div>
+    <div class="stat"><strong id="statLots">0</strong><span>Lots</span></div>
+    <div class="stat"><strong id="statSold">0</strong><span>Vendus</span></div>
+  </div>
+
+  <div class="section-title">
+    <h2>Derniers ajoutés</h2>
+  </div>
+
+  <div id="recentList"></div>
+
+  <button class="secondary" onclick="closeCurrentBox()">Fermer la caisse</button>
+
+</section>
+
+
+<!-- 2 STOCK -->
+
+<section id="stock" class="screen">
+
+  <input id="stockSearch" class="search"
+         placeholder="Rechercher un DVD..."
+         oninput="renderStock()">
+
+  <div class="tabs">
+    <button class="tab active" onclick="setFilter('all',this)">Tous</button>
+    <button class="tab" onclick="setFilter('sale',this)">À vendre</button>
+    <button class="tab" onclick="setFilter('lot',this)">Lots</button>
+    <button class="tab" onclick="setFilter('rare',this)">À part / Rare</button>
+    <button class="tab" onclick="setFilter('sold',this)">Vendus</button>
+  </div>
+
+  <div id="stockList"></div>
+
+</section>
+
+
+<!-- 3 FICHE DVD -->
+
+<section id="detail" class="screen">
+
+  <div id="detailContent"></div>
+
+</section>
+
+
+<!-- 4 LOTS -->
+
+<section id="lots" class="screen">
+
+  <div class="tabs">
+    <button class="tab active">Tous</button>
+    <button class="tab">Prêts</button>
+    <button class="tab">En cours</button>
+    <button class="tab">Vendus</button>
+  </div>
+
+  <div class="section-title">
+    <h2>Lots</h2>
+    <span class="link" onclick="createDemoLot()">+ Créer un lot</span>
+  </div>
+
+  <div id="lotsList"></div>
+
+</section>
+
+
+<!-- 5 VENTES -->
+
+<section id="sales" class="screen">
+
+  <div class="tabs">
+    <button class="tab active">À publier</button>
+    <button class="tab">En ligne</button>
+    <button class="tab">Vendus</button>
+  </div>
+
+  <div class="section-title">
+    <h2>DVD à vendre</h2>
+  </div>
+
+  <div id="salesList"></div>
+
+</section>
+
+
+<!-- 6 REGLAGES / CAISSES -->
+
+<section id="settings" class="screen">
+
+  <div class="section-title">
+    <h2>Mes caisses</h2>
+    <span class="link" onclick="createBox()">+ Ajouter</span>
+  </div>
+
+  <div id="boxesList"></div>
+
+  <div class="section-title">
+    <h2>Paramètres</h2>
+  </div>
+
+  <div class="card">
+    <div class="setting"><span>🏷️ Catégories / Genres</span><span>›</span></div>
+    <div class="setting"><span>🛒 Plateformes de vente</span><span>›</span></div>
+    <div class="setting"><span>⬆️ Sauvegarde & export</span><span>›</span></div>
+    <div class="setting" onclick="resetDemo()"><span>♻️ Réinitialiser les données</span><span>›</span></div>
+  </div>
+
+</section>
+
+</div>
+
+
+<nav class="bottom-nav">
+
+<button class="nav active" onclick="go('home',this)">
+  <span class="icon">⌂</span>Accueil
+</button>
+
+<button class="nav" onclick="go('stock',this)">
+  <span class="icon">▣</span>Stock
+</button>
+
+<button class="nav" onclick="go('lots',this)">
+  <span class="icon">♧</span>Lots
+</button>
+
+<button class="nav" onclick="go('sales',this)">
+  <span class="icon">◇</span>Vente
+</button>
+
+<button class="nav" onclick="go('settings',this)">
+  <span class="icon">⚙</span>Réglages
+</button>
+
+</nav>
+
+
+<!-- SCANNER / SAISIE -->
+
+<div id="scanModal" class="modal">
+
+<div class="modal-content">
+
+<h2>Ajouter un DVD</h2>
+
+<div class="meta">
+Pour cette première version, saisissez ou scannez l'EAN.
+</div>
+
+<input id="eanInput"
+       inputmode="numeric"
+       placeholder="Code-barres EAN">
+
+<input id="titleInput"
+       placeholder="Titre du DVD">
+
+<input id="priceInput"
+       inputmode="decimal"
+       placeholder="Prix estimé (€)">
+
+<button class="primary" onclick="addDVD()">
+Ajouter à la caisse
+</button>
+
+<button class="secondary" onclick="closeScanner()">
+Annuler
+</button>
+
+</div>
+</div>
+
+
+<script>
+
+const BOX_CAPACITY = 60;
+
+let dvds = JSON.parse(localStorage.getItem("dvdstock_dvds") || "[]");
+
+let boxes = JSON.parse(localStorage.getItem("dvdstock_boxes") || "null");
+
+if(!boxes){
+  boxes=[
+    {
+      id:"C01",
+      number:1,
+      status:"open",
+      createdAt:new Date().toISOString()
+    }
+  ];
+  save();
+}
+
+let lots = JSON.parse(localStorage.getItem("dvdstock_lots") || "[]");
+
+let currentFilter="all";
+
+
+function save(){
+  localStorage.setItem("dvdstock_dvds",JSON.stringify(dvds));
+  localStorage.setItem("dvdstock_boxes",JSON.stringify(boxes));
+  localStorage.setItem("dvdstock_lots",JSON.stringify(lots));
+}
+
+
+function currentBox(){
+
+  let box=boxes.find(b=>b.status==="open");
+
+  if(!box){
+    createBox();
+    box=boxes.find(b=>b.status==="open");
+  }
+
+  return box;
+}
+
+
+function boxDVDs(boxId){
+  return dvds.filter(d=>d.boxId===boxId);
+}
+
+
+function formatLocation(dvd){
+  return dvd.boxId+"-"+String(dvd.position).padStart(3,"0");
+}
+
+
+function escapeHtml(value){
+  const div=document.createElement("div");
+  div.textContent=value || "";
+  return div.innerHTML;
+}
+
+
+function go(screen,button){
+
+  document.querySelectorAll(".screen").forEach(x=>x.classList.remove("active"));
+
+  document.getElementById(screen).classList.add("active");
+
+  if(screen!=="detail"){
+    document.querySelectorAll(".nav").forEach(x=>x.classList.remove("active"));
+    if(button) button.classList.add("active");
+  }
+
+  const titles={
+    home:["Scanner","Ajoutez rapidement vos DVD au stock."],
+    stock:["Stock","Tous les DVD inventoriés."],
+    detail:["Détail DVD","Informations et emplacement."],
+    lots:["Lots","Regroupez les DVD pour mieux les vendre."],
+    sales:["Vente","Préparez vos annonces."],
+    settings:["Réglages","Caisses et paramètres."]
+  };
+
+  document.getElementById("pageTitle").textContent=titles[screen][0];
+  document.getElementById("pageSubtitle").textContent=titles[screen][1];
+
+  renderAll();
+
+  window.scrollTo(0,0);
+}
+
+
+function openScanner(){
+
+  document.getElementById("scanModal").classList.add("active");
+
+  document.getElementById("eanInput").focus();
+}
+
+
+function closeScanner(){
+
+  document.getElementById("scanModal").classList.remove("active");
+
+  document.getElementById("eanInput").value="";
+  document.getElementById("titleInput").value="";
+  document.getElementById("priceInput").value="";
+}
+
+
+function addDVD(){
+
+  const ean=document.getElementById("eanInput").value.trim();
+
+  const title=document.getElementById("titleInput").value.trim();
+
+  const price=parseFloat(
+    document.getElementById("priceInput").value.replace(",",".")
+  ) || 0;
+
+  if(!title){
+    alert("Indiquez au minimum le titre du DVD.");
+    return;
+  }
+
+  const box=currentBox();
+
+  const existing=boxDVDs(box.id);
+
+  if(existing.length>=BOX_CAPACITY){
+    alert("Cette caisse est pleine. Fermez-la avant de continuer.");
+    return;
+  }
+
+  const dvd={
+    id:Date.now()+"-"+Math.random(),
+    ean:ean,
+    title:title,
+    estimateMin:price,
+    estimateMax:price,
+    boxId:box.id,
+    position:existing.length+1,
+    status:"sale",
+    classification:"sale",
+    createdAt:new Date().toISOString()
+  };
+
+  dvds.unshift(dvd);
+
+  save();
+
+  closeScanner();
+
+  renderAll();
+}
+
+
+function dvdCard(dvd){
+
+  const location=formatLocation(dvd);
+
+  let badge="À vendre";
+
+  if(dvd.classification==="lot") badge="LOT";
+  if(dvd.classification==="rare") badge="À PART / RARE";
+  if(dvd.status==="sold") badge="VENDU";
+
+  const price=dvd.estimateMin
+    ? dvd.estimateMin.toFixed(0)+" €"
+    : "À estimer";
+
+  return `
+    <div class="card dvd" onclick="openDVD('${dvd.id}')">
+
+      <div class="cover"></div>
+
+      <div class="dvd-info">
+
+        <div class="dvd-title">
+          ${escapeHtml(dvd.title)}
+        </div>
+
+        <div class="meta">
+          ${escapeHtml(dvd.ean || "EAN non renseigné")}
+        </div>
+
+        <div class="price">${price}</div>
+
+        <span class="badge ${dvd.status==="sold" ? "sold" : dvd.classification}">
+          ${badge}
+        </span>
+
+      </div>
+
+      <div class="location">
+        ${location}
+      </div>
+
+    </div>
+  `;
+}
+
+
+function renderHome(){
+
+  const box=currentBox();
+
+  const items=boxDVDs(box.id);
+
+  document.getElementById("currentBox").textContent=
+    "CAISSE "+String(box.number).padStart(2,"0");
+
+  document.getElementById("boxCount").textContent=items.length;
+
+  document.getElementById("progressText").textContent=
+    items.length+" / "+BOX_CAPACITY+" DVD";
+
+  document.getElementById("boxProgress").style.width=
+    Math.min(100,(items.length/BOX_CAPACITY)*100)+"%";
+
+  document.getElementById("statStock").textContent=
+    dvds.filter(d=>d.status!=="sold").length;
+
+  document.getElementById("statSale").textContent=
+    dvds.filter(d=>d.status!=="sold" && d.classification==="sale").length;
+
+  document.getElementById("statLots").textContent=lots.length;
+
+  document.getElementById("statSold").textContent=
+    dvds.filter(d=>d.status==="sold").length;
+
+  const recent=dvds.slice(0,4);
+
+  document.getElementById("recentList").innerHTML=
+    recent.length
+    ? recent.map(dvdCard).join("")
+    : `<div class="card empty">Aucun DVD enregistré.<br>Scannez le premier.</div>`;
+}
+
+
+function setFilter(filter,button){
+
+  currentFilter=filter;
+
+  document.querySelectorAll("#stock .tab").forEach(x=>x.classList.remove("active"));
+
+  button.classList.add("active");
+
+  renderStock();
+}
+
+
+function renderStock(){
+
+  const search=(document.getElementById("stockSearch")?.value || "")
+    .toLowerCase();
+
+  let list=dvds.filter(d=>d.title.toLowerCase().includes(search));
+
+  if(currentFilter==="sold"){
+    list=list.filter(d=>d.status==="sold");
+  }
+
+  else if(currentFilter!=="all"){
+    list=list.filter(
+      d=>d.classification===currentFilter && d.status!=="sold"
+    );
+  }
+
+  document.getElementById("stockList").innerHTML=
+    list.length
+    ? list.map(dvdCard).join("")
+    : `<div class="card empty">Aucun DVD trouvé.</div>`;
+}
+
+
+function openDVD(id){
+
+  const dvd=dvds.find(d=>d.id===id);
+
+  if(!dvd) return;
+
+  document.getElementById("detailContent").innerHTML=`
+
+    <div class="detail-top">
+
+      <div class="detail-cover"></div>
+
+      <div>
+
+        <h2>${escapeHtml(dvd.title)}</h2>
+
+        <div class="meta">
+          ${escapeHtml(dvd.ean || "EAN non renseigné")}
+        </div>
+
+        <div class="price" style="font-size:18px;margin-top:12px">
+          ${dvd.estimateMin ? dvd.estimateMin+" €" : "À estimer"}
+        </div>
+
+      </div>
+
+    </div>
+
+    <div class="card">
+
+      <div class="row">
+        <span>Code-barres</span>
+        <strong>${escapeHtml(dvd.ean || "—")}</strong>
+      </div>
+
+      <div class="row">
+        <span>Emplacement</span>
+        <strong>${formatLocation(dvd)}</strong>
+      </div>
+
+      <div class="row">
+        <span>Statut</span>
+        <strong>${dvd.status==="sold" ? "Vendu" : "À vendre"}</strong>
+      </div>
+
+      <div class="row">
+        <span>Classement</span>
+        <strong>${dvd.classification}</strong>
+      </div>
+
+    </div>
+
+    <button class="primary"
+      onclick="markSold('${dvd.id}')">
+      ${dvd.status==="sold" ? "Remettre en vente" : "Marquer comme vendu"}
+    </button>
+
+    <button class="secondary"
+      onclick="changeClass('${dvd.id}')">
+      Changer le classement
+    </button>
+
+    <button class="danger"
+      onclick="deleteDVD('${dvd.id}')">
+      Supprimer
+    </button>
+
+  `;
+
+  go("detail");
+}
+
+
+function markSold(id){
+
+  const dvd=dvds.find(d=>d.id===id);
+
+  dvd.status=dvd.status==="sold" ? "stock" : "sold";
+
+  save();
+
+  openDVD(id);
+}
+
+
+function changeClass(id){
+
+  const dvd=dvds.find(d=>d.id===id);
+
+  const choices=["sale","lot","rare"];
+
+  const index=choices.indexOf(dvd.classification);
+
+  dvd.classification=choices[(index+1)%choices.length];
+
+  save();
+
+  openDVD(id);
+}
+
+
+function deleteDVD(id){
+
+  if(!confirm("Supprimer ce DVD du stock ?")) return;
+
+  dvds=dvds.filter(d=>d.id!==id);
+
+  save();
+
+  go("stock",document.querySelectorAll(".nav")[1]);
+}
+
+
+function closeCurrentBox(){
+
+  const box=currentBox();
+
+  const count=boxDVDs(box.id).length;
+
+  if(!count){
+    alert("La caisse est vide.");
+    return;
+  }
+
+  if(!confirm(
+    "Fermer la CAISSE "+
+    String(box.number).padStart(2,"0")+
+    " avec "+count+" DVD ?"
+  )) return;
+
+  box.status="closed";
+  box.closedAt=new Date().toISOString();
+
+  createBox();
+
+  save();
+
+  renderAll();
+}
+
+
+function createBox(){
+
+  const open=boxes.find(b=>b.status==="open");
+
+  if(open) return open;
+
+  const nextNumber=
+    boxes.length
+    ? Math.max(...boxes.map(b=>b.number))+1
+    : 1;
+
+  const box={
+    id:"C"+String(nextNumber).padStart(2,"0"),
+    number:nextNumber,
+    status:"open",
+    createdAt:new Date().toISOString()
+  };
+
+  boxes.push(box);
+
+  save();
+
+  renderAll();
+
+  return box;
+}
+
+
+function renderBoxes(){
+
+  const list=[...boxes].sort((a,b)=>b.number-a.number);
+
+  document.getElementById("boxesList").innerHTML=
+    list.map(box=>{
+
+      const count=boxDVDs(box.id).length;
+
+      return `
+
+        <div class="card box-row">
+
+          <div class="box-left">
+
+            <div class="box-icon">📦</div>
+
+            <div>
+
+              <strong>
+                Caisse ${String(box.number).padStart(2,"0")}
+              </strong>
+
+              <div class="meta">
+                ${box.status==="open" ? "Caisse actuelle" : "Fermée"}
+              </div>
+
+            </div>
+
+          </div>
+
+          <div style="text-align:right">
+
+            <strong>${count} DVD</strong>
+
+            ${
+              box.status==="open"
+              ? `<div class="badge sale">ACTIVE</div>`
+              : ``
+            }
+
+          </div>
+
+        </div>
+
+      `;
+
+    }).join("");
+}
+
+
+function createDemoLot(){
+
+  const candidates=dvds
+    .filter(d=>d.status!=="sold" && d.classification==="lot")
+    .slice(0,6);
+
+  if(candidates.length<2){
+
+    alert(
+      "Classez au moins deux DVD en LOT avant de créer un lot."
+    );
+
+    return;
+  }
+
+  lots.push({
+    id:Date.now()+"",
+    title:"Lot de "+candidates.length+" DVD",
+    dvdIds:candidates.map(d=>d.id),
+    status:"ready"
+  });
+
+  save();
+
+  renderLots();
+}
+
+
+function renderLots(){
+
+  if(!lots.length){
+
+    document.getElementById("lotsList").innerHTML=
+      `<div class="card empty">
+        Aucun lot pour le moment.<br>
+        L'application pourra ensuite proposer automatiquement des regroupements.
+      </div>`;
+
+    return;
+  }
+
+  document.getElementById("lotsList").innerHTML=
+    lots.map(lot=>{
+
+      const items=lot.dvdIds
+        .map(id=>dvds.find(d=>d.id===id))
+        .filter(Boolean);
+
+      return `
+
+        <div class="card">
+
+          <strong>${escapeHtml(lot.title)}</strong>
+
+          <div class="lot-images">
+
+            ${items.slice(0,6).map(
+              ()=>`<div class="mini-cover"></div>`
+            ).join("")}
+
+          </div>
+
+          <div class="meta">
+            ${items.length} DVD
+          </div>
+
+          <span class="badge sale">PRÊT</span>
+
+        </div>
+
+      `;
+
+    }).join("");
+}
+
+
+function renderSales(){
+
+  const list=dvds.filter(
+    d=>d.status!=="sold" && d.classification==="sale"
+  );
+
+  document.getElementById("salesList").innerHTML=
+    list.length
+    ? list.map(dvdCard).join("")
+    : `<div class="card empty">
+        Aucun DVD individuel à publier.
+      </div>`;
+}
+
+
+function resetDemo(){
+
+  if(!confirm("Effacer toutes les données de DVD Stock ?")) return;
+
+  localStorage.removeItem("dvdstock_dvds");
+  localStorage.removeItem("dvdstock_boxes");
+  localStorage.removeItem("dvdstock_lots");
+
+  location.reload();
+}
+
+
+function renderAll(){
+
+  renderHome();
+  renderStock();
+  renderBoxes();
+  renderLots();
+  renderSales();
+}
+
+
+renderAll();
+
+</script>
+
+</body>
+</html>
