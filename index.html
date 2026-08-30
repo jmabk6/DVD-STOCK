@@ -433,7 +433,7 @@ header p{
 }
 </style>
 
-<script src="https://cdn.jsdelivr.net/npm/@taluks/html5-qrcode@2.4.0/minified/html5-qrcode.min.js"></script>
+<script type="text/javascript" src="https://unpkg.com/@zxing/browser@latest"></script>
 </head>
 
 <body>
@@ -757,10 +757,11 @@ function openScanner(){
 
 function closeScanner(){
 
-  if(html5QrCode && scannerRunning){
+  if(scannerControls && scannerRunning){
     scannerRunning = false;
-    html5QrCode.stop().catch(()=>{});
+    try{ scannerControls.stop(); }catch(e){}
   }
+  scannerControls = null;
 
   const reader = document.getElementById("reader");
   const button = document.getElementById("cameraButton");
@@ -1282,7 +1283,7 @@ function renderAll(){
 
 
 
-let html5QrCode = null;
+let scannerControls = null;
 let scannerRunning = false;
 
 async function startCamera(){
@@ -1291,57 +1292,62 @@ async function startCamera(){
 
   if(scannerRunning) return;
 
-  if(typeof Html5Qrcode === "undefined"){
-    alert("Le module scanner n'a pas pu se charger. Rechargez la page puis réessayez.");
+  if(typeof ZXingBrowser === "undefined"){
+    alert("Le module scanner n'a pas pu se charger. Rechargez la page dans Safari.");
     return;
   }
 
   reader.style.display = "block";
-  reader.innerHTML = "";
+  reader.innerHTML = `
+    <video id="scannerVideo"
+           playsinline
+           muted
+           style="width:100%;max-height:320px;border-radius:14px;background:#111;object-fit:cover;">
+    </video>
+    <div class="meta" style="text-align:center;margin-top:8px">
+      Placez le code-barres au centre de l'image.
+    </div>
+  `;
+
   button.disabled = true;
   button.textContent = "Ouverture de la caméra…";
 
   try{
-    html5QrCode = new Html5Qrcode("reader", {
-      formatsToSupport: [
-        Html5QrcodeSupportedFormats.EAN_13,
-        Html5QrcodeSupportedFormats.EAN_8,
-        Html5QrcodeSupportedFormats.UPC_A,
-        Html5QrcodeSupportedFormats.UPC_E
-      ]
-    });
+    const codeReader = new ZXingBrowser.BrowserMultiFormatReader();
+    const video = document.getElementById("scannerVideo");
 
     scannerRunning = true;
 
-    await html5QrCode.start(
-      { facingMode: { ideal: "environment" } },
+    scannerControls = await codeReader.decodeFromConstraints(
       {
-        fps: 10,
-        qrbox: function(viewfinderWidth, viewfinderHeight){
-          const width = Math.min(320, Math.floor(viewfinderWidth * 0.88));
-          const height = Math.min(150, Math.floor(viewfinderHeight * 0.38));
-          return { width, height };
-        },
-        aspectRatio: 1.333334,
-        disableFlip: true
+        audio: false,
+        video: {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 1280 },
+          height: { ideal: 720 }
+        }
       },
-      async function(decodedText){
-        document.getElementById("eanInput").value = decodedText;
+      video,
+      (result, error, controls) => {
+        if(!result) return;
+
+        const value = result.getText ? result.getText() : String(result.text || result);
+        if(!value) return;
+
+        document.getElementById("eanInput").value = value;
 
         if(scannerRunning){
           scannerRunning = false;
-          try{ await html5QrCode.stop(); }catch(e){}
+          try{ controls.stop(); }catch(e){}
         }
 
         reader.style.display = "none";
+        reader.innerHTML = "";
         button.disabled = false;
         button.textContent = "✓ Code-barres scanné";
 
         if(navigator.vibrate) navigator.vibrate(100);
         document.getElementById("titleInput").focus();
-      },
-      function(){
-        // Aucun code détecté sur cette image : on continue.
       }
     );
 
@@ -1350,16 +1356,17 @@ async function startCamera(){
   }catch(error){
     console.error("Scanner:", error);
     scannerRunning = false;
+    scannerControls = null;
     reader.style.display = "none";
     reader.innerHTML = "";
     button.disabled = false;
     button.textContent = "📷 Scanner le code-barres avec la caméra";
 
     let message = "Impossible d'ouvrir la caméra.";
-    if(error && error.name === "NotAllowedError"){
+    if(error && (error.name === "NotAllowedError" || error.name === "PermissionDeniedError")){
       message += "\n\nSur l'iPhone : Réglages > Apps > Safari > Caméra > Autoriser.";
     }else{
-      message += "\n\nRechargez la page dans Safari et réessayez.";
+      message += "\n\nRechargez la page dans Safari puis réessayez.";
     }
     alert(message);
   }
