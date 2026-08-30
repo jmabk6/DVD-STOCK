@@ -651,6 +651,43 @@ header p{
   font-size:12px;
   color:var(--muted);
 }
+
+.cover-live{
+  display:none;
+  margin-top:10px;
+}
+.cover-live-wrap{
+  position:relative;
+  width:100%;
+  border-radius:14px;
+  overflow:hidden;
+  background:#111;
+}
+#coverLiveVideo{
+  display:block;
+  width:100%;
+  max-height:62vh;
+  object-fit:cover;
+  background:#111;
+}
+.cover-guide{
+  position:absolute;
+  inset:7%;
+  border:3px solid rgba(255,255,255,.9);
+  border-radius:10px;
+  pointer-events:none;
+  box-shadow:0 0 0 9999px rgba(0,0,0,.22);
+}
+.cover-live-actions{
+  display:flex;
+  gap:8px;
+  margin-top:10px;
+}
+.cover-live-actions button{
+  flex:1;
+  margin:0;
+}
+
 </style>
 
 <script type="text/javascript" src="https://unpkg.com/@zxing/browser@latest"></script>
@@ -851,27 +888,34 @@ header p{
 </button>
 
 <div class="meta">
-Scannez l'EAN : l'application tente ensuite de retrouver automatiquement le DVD dans le catalogue BnF.
+Ajoutez la jaquette, scannez l'EAN puis dictez le titre.
 </div>
 
 <div class="cover-scan-zone">
   <strong>1. Scanner la jaquette</strong>
   <div class="meta" style="margin-top:5px">
-    Photographiez la face avant. L'app cherche les 4 bords, redresse la perspective et vous laisse corriger les coins.
+    La caméra s'ouvre directement ici. Cadrez la jaquette entière dans le rectangle.
   </div>
 
-  <input id="coverPhotoInput"
-         type="file"
-         accept="image/*"
-         capture="environment"
-         style="display:none"
-         onchange="handleCoverScan(this.files && this.files[0])">
-
-  <button class="primary"
-          onclick="document.getElementById('coverPhotoInput').click()"
+  <button id="openCoverCameraButton"
+          class="primary"
+          type="button"
+          onclick="startCoverCamera()"
           style="margin-top:10px">
-    📷 Scanner la jaquette
+    📷 Ouvrir le scanner de jaquette
   </button>
+
+  <div id="coverLive" class="cover-live">
+    <div class="cover-live-wrap">
+      <video id="coverLiveVideo" playsinline muted autoplay></video>
+      <div class="cover-guide"></div>
+    </div>
+
+    <div class="cover-live-actions">
+      <button class="secondary" type="button" onclick="stopCoverCamera()">Annuler</button>
+      <button class="primary" type="button" onclick="captureCoverFrame()">● Capturer</button>
+    </div>
+  </div>
 
   <div id="coverScanStage" class="cover-scan-stage">
     <div class="cover-scan-wrap">
@@ -880,8 +924,8 @@ Scannez l'EAN : l'application tente ensuite de retrouver automatiquement le DVD 
     <div id="coverScanStatus" class="cover-scan-status"></div>
 
     <div class="cover-scan-actions">
-      <button class="secondary" onclick="resetDetectedCorners()">↺ Refaire les coins</button>
-      <button class="primary" onclick="validateCoverCrop()">✓ Valider le recadrage</button>
+      <button class="secondary" type="button" onclick="resetDetectedCorners()">↺ Refaire les coins</button>
+      <button class="primary" type="button" onclick="validateCoverCrop()">✓ Valider le recadrage</button>
     </div>
   </div>
 
@@ -1032,6 +1076,7 @@ function openScanner(){
 
 
 function closeScanner(){
+  stopCoverCamera();
 
   if(scannerControls && scannerRunning){
     scannerRunning = false;
@@ -1671,6 +1716,7 @@ let coverDraggingCorner = -1;
 let coverCroppedBlob = null;
 let coverCroppedUrl = "";
 let voiceRecognition = null;
+let coverCameraStream = null;
 
 function resetLookupUI(){
   currentLookup = null;
@@ -1687,7 +1733,6 @@ function resetLookupUI(){
 
   const status = document.getElementById("lookupStatus");
   const titleInput = document.getElementById("titleInput");
-  const photoInput = document.getElementById("coverPhotoInput");
   const stage = document.getElementById("coverScanStage");
   const finalBox = document.getElementById("coverFinal");
   const finalImage = document.getElementById("coverFinalImage");
@@ -1696,7 +1741,7 @@ function resetLookupUI(){
 
   if(status) status.textContent = "";
   if(titleInput) titleInput.value = "";
-  if(photoInput) photoInput.value = "";
+  stopCoverCamera();
   if(stage) stage.style.display = "none";
   if(finalBox) finalBox.style.display = "none";
   if(finalImage) finalImage.removeAttribute("src");
@@ -1853,66 +1898,107 @@ function drawCoverOverlay(){
   ctx.restore();
 }
 
-async function handleCoverScan(file){
-  if(!file) return;
 
+async function startCoverCamera(){
+  const live = document.getElementById("coverLive");
+  const video = document.getElementById("coverLiveVideo");
+  const button = document.getElementById("openCoverCameraButton");
+  const status = document.getElementById("coverScanStatus");
   const stage = document.getElementById("coverScanStage");
   const finalBox = document.getElementById("coverFinal");
+
+  stopCoverCamera();
+
+  if(stage) stage.style.display = "none";
+  if(finalBox) finalBox.style.display = "none";
+  coverCroppedBlob = null;
+
+  try{
+    coverCameraStream = await navigator.mediaDevices.getUserMedia({
+      audio:false,
+      video:{
+        facingMode:{ideal:"environment"},
+        width:{ideal:1920},
+        height:{ideal:1080}
+      }
+    });
+
+    video.srcObject = coverCameraStream;
+    live.style.display = "block";
+    button.style.display = "none";
+
+    await video.play().catch(()=>{});
+  }catch(error){
+    console.error("Caméra jaquette:", error);
+    alert("Impossible d'ouvrir la caméra pour la jaquette. Vérifiez l'autorisation caméra dans Safari.");
+  }
+}
+
+function stopCoverCamera(){
+  const video = document.getElementById("coverLiveVideo");
+  const live = document.getElementById("coverLive");
+  const button = document.getElementById("openCoverCameraButton");
+
+  if(coverCameraStream){
+    coverCameraStream.getTracks().forEach(track=>track.stop());
+    coverCameraStream = null;
+  }
+
+  if(video) video.srcObject = null;
+  if(live) live.style.display = "none";
+  if(button) button.style.display = "";
+}
+
+async function captureCoverFrame(){
+  const video = document.getElementById("coverLiveVideo");
+  const stage = document.getElementById("coverScanStage");
   const status = document.getElementById("coverScanStatus");
   const canvas = document.getElementById("coverScanCanvas");
 
-  finalBox.style.display = "none";
-  coverCroppedBlob = null;
-
-  if(coverCroppedUrl){
-    URL.revokeObjectURL(coverCroppedUrl);
-    coverCroppedUrl = "";
+  if(!video || !video.videoWidth || !video.videoHeight){
+    alert("La caméra n'est pas encore prête.");
+    return;
   }
 
-  status.textContent = "Chargement de la photo…";
+  const maxW = 1000;
+  const scale = Math.min(1, maxW / video.videoWidth);
+  canvas.width = Math.round(video.videoWidth * scale);
+  canvas.height = Math.round(video.videoHeight * scale);
+
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(video,0,0,canvas.width,canvas.height);
+
+  coverOriginalImage = new Image();
+  coverOriginalImage.src = canvas.toDataURL("image/jpeg",0.92);
+
+  await new Promise((resolve,reject)=>{
+    coverOriginalImage.onload = resolve;
+    coverOriginalImage.onerror = reject;
+  });
+
+  stopCoverCamera();
   stage.style.display = "block";
+  status.textContent = "Détection automatique des 4 bords…";
 
-  const imageUrl = URL.createObjectURL(file);
-  const img = new Image();
+  try{
+    await waitForOpenCV();
 
-  img.onload = async ()=>{
-    coverOriginalImage = img;
+    coverDisplayCorners = detectCoverCorners(canvas);
+    coverInitialCorners = coverDisplayCorners.map(p=>({...p}));
+    drawCoverOverlay();
 
-    const maxW = 900;
-    const scale = Math.min(1, maxW / img.naturalWidth);
-    canvas.width = Math.round(img.naturalWidth * scale);
-    canvas.height = Math.round(img.naturalHeight * scale);
+    status.textContent =
+      "Contour détecté. Déplacez les 4 points si nécessaire, puis validez.";
+  }catch(error){
+    console.warn("Détection jaquette:", error);
 
-    const ctx = canvas.getContext("2d");
-    ctx.drawImage(img,0,0,canvas.width,canvas.height);
+    coverDisplayCorners = fallbackCorners(canvas.width,canvas.height);
+    coverInitialCorners = coverDisplayCorners.map(p=>({...p}));
+    drawCoverOverlay();
 
-    try{
-      status.textContent = "Détection automatique des 4 bords…";
-      await waitForOpenCV();
-
-      coverDisplayCorners = detectCoverCorners(canvas);
-      coverInitialCorners = coverDisplayCorners.map(p=>({...p}));
-      drawCoverOverlay();
-
-      status.textContent =
-        "Contour détecté. Si besoin, déplacez les 4 points avec le doigt puis validez.";
-    }catch(error){
-      console.warn("Détection jaquette:", error);
-      coverDisplayCorners = fallbackCorners(canvas.width,canvas.height);
-      coverInitialCorners = coverDisplayCorners.map(p=>({...p}));
-      drawCoverOverlay();
-
-      status.textContent =
-        "Détection automatique indisponible. Ajustez les 4 coins manuellement puis validez.";
-    }
-  };
-
-  img.onerror = ()=>{
-    status.textContent = "Impossible d'ouvrir cette photo.";
-    URL.revokeObjectURL(imageUrl);
-  };
-
-  img.src = imageUrl;
+    status.textContent =
+      "Ajustez les 4 coins avec le doigt puis validez.";
+  }
 }
 
 function resetDetectedCorners(){
@@ -2160,6 +2246,7 @@ let scannerControls = null;
 let scannerRunning = false;
 
 async function startCamera(){
+  stopCoverCamera();
   const reader = document.getElementById("reader");
   const button = document.getElementById("cameraButton");
 
