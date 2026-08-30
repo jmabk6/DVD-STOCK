@@ -183,6 +183,40 @@ header p{
   object-fit:cover;
   flex:none;
 }
+.cover img{
+  width:100%;
+  height:100%;
+  object-fit:cover;
+  border-radius:8px;
+  display:block;
+}
+
+.lookup-status{
+  margin:9px 0 4px;
+  min-height:18px;
+  font-size:12px;
+  color:var(--muted);
+}
+
+.lookup-preview{
+  display:none;
+  gap:12px;
+  align-items:flex-start;
+  margin:10px 0 6px;
+  padding:10px;
+  border:1px solid var(--line);
+  border-radius:12px;
+  background:#fafaff;
+}
+
+.lookup-preview img{
+  width:58px;
+  height:82px;
+  object-fit:cover;
+  border-radius:8px;
+  background:#ececf3;
+}
+
 
 .dvd-info{flex:1;min-width:0}
 
@@ -630,12 +664,23 @@ header p{
 </button>
 
 <div class="meta">
-Pour cette première version, saisissez ou scannez l'EAN.
+Scannez l'EAN : l'application tente ensuite de retrouver automatiquement le DVD dans le catalogue BnF.
+</div>
+
+<div id="lookupStatus" class="lookup-status"></div>
+
+<div id="lookupPreview" class="lookup-preview">
+  <img id="lookupCover" alt="">
+  <div>
+    <strong id="lookupTitle"></strong>
+    <div id="lookupMeta" class="meta" style="margin-top:5px"></div>
+  </div>
 </div>
 
 <input id="eanInput"
        inputmode="numeric"
-       placeholder="Code-barres EAN">
+       placeholder="Code-barres EAN"
+       onchange="lookupDVDByEAN(this.value.trim())">
 
 <input id="titleInput"
        placeholder="Titre du DVD">
@@ -780,6 +825,12 @@ function closeScanner(){
   document.getElementById("eanInput").value="";
   document.getElementById("titleInput").value="";
   document.getElementById("priceInput").value="";
+  currentLookup = null;
+
+  const lookupStatus = document.getElementById("lookupStatus");
+  const lookupPreview = document.getElementById("lookupPreview");
+  if(lookupStatus) lookupStatus.textContent = "";
+  if(lookupPreview) lookupPreview.style.display = "none";
 }
 
 
@@ -813,6 +864,11 @@ function addDVD(){
     title:title,
     estimateMin:price,
     estimateMax:price,
+    coverUrl: currentLookup?.coverUrl || "",
+    year: currentLookup?.year || "",
+    creator: currentLookup?.creator || "",
+    publisher: currentLookup?.publisher || "",
+    source: currentLookup?.source || "",
     boxId:box.id,
     position:existing.length+1,
     status:"sale",
@@ -847,7 +903,7 @@ function dvdCard(dvd){
   return `
     <div class="card dvd" onclick="openDVD('${dvd.id}')">
 
-      <div class="cover"></div>
+      <div class="cover">${dvd.coverUrl ? `<img src="${escapeHtml(dvd.coverUrl)}" alt="" onerror="this.style.display='none'">` : ""}</div>
 
       <div class="dvd-info">
 
@@ -1283,6 +1339,125 @@ function renderAll(){
 
 
 
+
+let currentLookup = null;
+
+function firstXmlText(root, localName){
+  const nodes = root.getElementsByTagNameNS("*", localName);
+  if(!nodes || !nodes.length) return "";
+  return (nodes[0].textContent || "").trim();
+}
+
+function allXmlTexts(root, localName){
+  return Array.from(root.getElementsByTagNameNS("*", localName))
+    .map(n => (n.textContent || "").trim())
+    .filter(Boolean);
+}
+
+async function lookupDVDByEAN(ean){
+  ean = String(ean || "").replace(/\D/g, "");
+  if(!ean) return;
+
+  const status = document.getElementById("lookupStatus");
+  const preview = document.getElementById("lookupPreview");
+  const titleInput = document.getElementById("titleInput");
+
+  currentLookup = null;
+  preview.style.display = "none";
+  status.textContent = "Recherche du DVD dans le catalogue BnF…";
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 9000);
+
+  try{
+    const query = `bib.ean adj "${ean}"`;
+    const url =
+      "https://catalogue.bnf.fr/api/SRU" +
+      "?version=1.2" +
+      "&operation=searchRetrieve" +
+      "&query=" + encodeURIComponent(query) +
+      "&recordSchema=dublincore" +
+      "&maximumRecords=1";
+
+    const response = await fetch(url, {
+      method: "GET",
+      mode: "cors",
+      signal: controller.signal
+    });
+
+    if(!response.ok){
+      throw new Error("HTTP " + response.status);
+    }
+
+    const xmlText = await response.text();
+    const xml = new DOMParser().parseFromString(xmlText, "application/xml");
+
+    if(xml.getElementsByTagName("parsererror").length){
+      throw new Error("Réponse BnF illisible");
+    }
+
+    const total = parseInt(firstXmlText(xml, "numberOfRecords") || "0", 10);
+    if(!total){
+      status.textContent = "EAN scanné, mais aucune fiche BnF trouvée. Saisissez le titre manuellement.";
+      titleInput.focus();
+      return;
+    }
+
+    const titles = allXmlTexts(xml, "title");
+    const creators = allXmlTexts(xml, "creator");
+    const dates = allXmlTexts(xml, "date");
+    const publishers = allXmlTexts(xml, "publisher");
+
+    const title = titles[0] || "";
+    const creator = creators[0] || "";
+    const dateText = dates[0] || "";
+    const yearMatch = dateText.match(/\b(19|20)\d{2}\b/);
+    const year = yearMatch ? yearMatch[0] : "";
+    const publisher = publishers[0] || "";
+
+    const coverUrl =
+      "https://openapi.bnf.fr/couverture/image/image/recupererImage" +
+      "?EAN=" + encodeURIComponent(ean) +
+      "&couverture=1" +
+      "&taille=originale" +
+      "&largeur=500" +
+      "&hauteur=500";
+
+    currentLookup = {
+      ean,
+      title,
+      creator,
+      year,
+      publisher,
+      coverUrl,
+      source: "BnF"
+    };
+
+    if(title){
+      titleInput.value = title;
+    }
+
+    document.getElementById("lookupTitle").textContent = title || "DVD trouvé";
+    document.getElementById("lookupMeta").textContent =
+      [year, creator, publisher].filter(Boolean).join(" · ");
+
+    const img = document.getElementById("lookupCover");
+    img.src = coverUrl;
+    img.style.display = "block";
+    img.onerror = function(){ this.style.display = "none"; };
+
+    preview.style.display = "flex";
+    status.textContent = "DVD trouvé automatiquement ✓";
+  }catch(error){
+    console.error("Recherche BnF:", error);
+    status.textContent =
+      "EAN scanné. La recherche automatique n'a pas répondu ; vous pouvez saisir le titre manuellement.";
+    titleInput.focus();
+  }finally{
+    clearTimeout(timeout);
+  }
+}
+
 let scannerControls = null;
 let scannerRunning = false;
 
@@ -1347,7 +1522,7 @@ async function startCamera(){
         button.textContent = "✓ Code-barres scanné";
 
         if(navigator.vibrate) navigator.vibrate(100);
-        document.getElementById("titleInput").focus();
+        lookupDVDByEAN(value);
       }
     );
 
