@@ -256,6 +256,66 @@ header p{
   color:#666777;
 }
 
+.lookup-candidates{
+  display:grid;
+  gap:10px;
+  margin:10px 0;
+}
+
+.lookup-candidate{
+  border:1px solid var(--line);
+  border-radius:14px;
+  padding:10px;
+  background:#fff;
+}
+
+.lookup-candidate-top{
+  display:flex;
+  gap:10px;
+  align-items:flex-start;
+}
+
+.lookup-candidate img{
+  width:58px;
+  height:82px;
+  object-fit:cover;
+  border-radius:8px;
+  background:#ececf3;
+  flex:0 0 auto;
+}
+
+.lookup-source{
+  display:inline-flex;
+  align-items:center;
+  padding:4px 7px;
+  border-radius:999px;
+  background:#f0efff;
+  color:#5146b7;
+  font-size:10px;
+  font-weight:800;
+  margin-bottom:5px;
+}
+
+.lookup-candidate-title{
+  font-weight:800;
+  line-height:1.25;
+  margin-bottom:4px;
+}
+
+.lookup-candidate button{
+  width:100%;
+  margin-top:9px;
+}
+
+.lookup-summary{
+  padding:9px 10px;
+  border-radius:12px;
+  background:#f7f7fb;
+  font-size:12px;
+  line-height:1.35;
+  color:var(--muted);
+}
+
 
 .dvd-info{flex:1;min-width:0}
 
@@ -708,31 +768,14 @@ Scannez l'EAN : l'application tente ensuite de retrouver automatiquement le DVD 
 
 <div id="lookupStatus" class="lookup-status"></div>
 
-<div id="lookupPreview" class="lookup-preview">
-  <div class="lookup-preview-main">
-    <img id="lookupCover" alt="">
-    <div style="min-width:0;flex:1">
-      <div id="lookupBadge" class="lookup-warning">⚠ Résultat à confirmer</div>
-      <strong id="lookupTitle"></strong>
-      <div id="lookupMeta" class="meta" style="margin-top:5px"></div>
-    </div>
-  </div>
-
-  <div id="lookupActions" class="lookup-actions">
-    <button id="confirmLookupButton" class="primary" onclick="confirmLookup()">
-      ✓ C'est le bon DVD
-    </button>
-    <button id="rejectLookupButton" class="secondary" onclick="rejectLookup()">
-      ✕ Ce n'est pas le bon
-    </button>
-  </div>
-</div>
+<div id="lookupSummary" class="lookup-summary" style="display:none"></div>
+<div id="lookupCandidates" class="lookup-candidates"></div>
 
 <button id="webSearchButton"
         class="secondary"
         onclick="searchEANOnWeb()"
         style="display:none;margin-bottom:10px;">
-  🔎 Rechercher cet EAN sur le web
+  🔎 Recherche web manuelle
 </button>
 
 <input id="eanInput"
@@ -886,10 +929,15 @@ function closeScanner(){
   currentLookup = null;
 
   const lookupStatus = document.getElementById("lookupStatus");
-  const lookupPreview = document.getElementById("lookupPreview");
+  const lookupCandidates = document.getElementById("lookupCandidates");
+  const lookupSummary = document.getElementById("lookupSummary");
   const webSearchButton = document.getElementById("webSearchButton");
   if(lookupStatus) lookupStatus.textContent = "";
-  if(lookupPreview) lookupPreview.style.display = "none";
+  if(lookupCandidates) lookupCandidates.innerHTML = "";
+  if(lookupSummary){
+    lookupSummary.style.display = "none";
+    lookupSummary.textContent = "";
+  }
   if(webSearchButton) webSearchButton.style.display = "none";
 }
 
@@ -928,7 +976,7 @@ function addDVD(){
     year: currentLookup?.confirmed ? (currentLookup.year || "") : "",
     creator: currentLookup?.confirmed ? (currentLookup.creator || "") : "",
     publisher: currentLookup?.confirmed ? (currentLookup.publisher || "") : "",
-    source: currentLookup?.confirmed ? (currentLookup.source || "BnF") : "manuel",
+    source: currentLookup?.confirmed ? (currentLookup.source || "") : "manuel",
     boxId:box.id,
     position:existing.length+1,
     status:"sale",
@@ -1400,7 +1448,34 @@ function renderAll(){
 
 
 
+
 let currentLookup = null;
+let currentCandidates = [];
+
+const LOOKUP_CACHE_KEY = "dvdstock_lookup_cache_v2";
+
+function loadLookupCache(){
+  try{
+    return JSON.parse(localStorage.getItem(LOOKUP_CACHE_KEY) || "{}");
+  }catch(e){
+    return {};
+  }
+}
+
+function saveLookupCache(cache){
+  try{
+    localStorage.setItem(LOOKUP_CACHE_KEY, JSON.stringify(cache));
+  }catch(e){}
+}
+
+function normalizeTitle(value){
+  return String(value || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
 
 function firstXmlText(root, localName){
   const nodes = root.getElementsByTagNameNS("*", localName);
@@ -1416,33 +1491,22 @@ function allXmlTexts(root, localName){
 
 function resetLookupUI(){
   currentLookup = null;
+  currentCandidates = [];
 
   const status = document.getElementById("lookupStatus");
-  const preview = document.getElementById("lookupPreview");
+  const candidates = document.getElementById("lookupCandidates");
+  const summary = document.getElementById("lookupSummary");
   const webSearchButton = document.getElementById("webSearchButton");
   const titleInput = document.getElementById("titleInput");
 
   if(status) status.textContent = "";
-  if(preview) preview.style.display = "none";
+  if(candidates) candidates.innerHTML = "";
+  if(summary){
+    summary.style.display = "none";
+    summary.textContent = "";
+  }
   if(webSearchButton) webSearchButton.style.display = "none";
   if(titleInput) titleInput.value = "";
-}
-
-function setLookupBadge(mode){
-  const badge = document.getElementById("lookupBadge");
-  if(!badge) return;
-
-  badge.className = "lookup-warning";
-
-  if(mode === "confirmed"){
-    badge.classList.add("lookup-ok");
-    badge.textContent = "✓ Identification confirmée";
-  }else if(mode === "rejected"){
-    badge.classList.add("lookup-rejected");
-    badge.textContent = "Résultat rejeté";
-  }else{
-    badge.textContent = "⚠ Résultat à confirmer";
-  }
 }
 
 function searchEANOnWeb(){
@@ -1452,79 +1516,166 @@ function searchEANOnWeb(){
     return;
   }
 
-  const query = `"${ean}" DVD`;
   window.open(
-    "https://www.google.com/search?q=" + encodeURIComponent(query),
+    "https://www.google.com/search?q=" + encodeURIComponent(`"${ean}" DVD`),
     "_blank",
     "noopener,noreferrer"
   );
 }
 
-function confirmLookup(){
-  if(!currentLookup || !currentLookup.title) return;
+function chooseCandidate(index){
+  const candidate = currentCandidates[index];
+  if(!candidate) return;
 
-  currentLookup.confirmed = true;
-  currentLookup.rejected = false;
+  currentLookup = {
+    ...candidate,
+    confirmed: true
+  };
 
-  document.getElementById("titleInput").value = currentLookup.title;
+  document.getElementById("titleInput").value = candidate.title || "";
   document.getElementById("lookupStatus").textContent =
-    "Identification confirmée. Vous pouvez ajouter le DVD à la caisse.";
+    `✓ « ${candidate.title} » retenu. Vous pouvez maintenant ajouter le DVD à la caisse.`;
 
-  setLookupBadge("confirmed");
-
-  const confirmButton = document.getElementById("confirmLookupButton");
-  const rejectButton = document.getElementById("rejectLookupButton");
-
-  confirmButton.disabled = true;
-  confirmButton.textContent = "✓ Confirmé";
-  rejectButton.disabled = false;
+  document.querySelectorAll(".lookup-candidate button").forEach((button, i)=>{
+    if(i === index){
+      button.disabled = true;
+      button.textContent = "✓ Sélectionné";
+    }else{
+      button.disabled = false;
+      button.textContent = "Choisir ce DVD";
+    }
+  });
 
   document.getElementById("titleInput").focus();
 }
 
-function rejectLookup(){
-  if(!currentLookup) return;
-
-  currentLookup.confirmed = false;
-  currentLookup.rejected = true;
-
-  const titleInput = document.getElementById("titleInput");
-  titleInput.value = "";
-
-  document.getElementById("lookupStatus").textContent =
-    "Résultat écarté. Recherchez l'EAN sur le web ou saisissez directement le bon titre.";
-
-  setLookupBadge("rejected");
-
-  const confirmButton = document.getElementById("confirmLookupButton");
-  const rejectButton = document.getElementById("rejectLookupButton");
-
-  confirmButton.disabled = false;
-  confirmButton.textContent = "✓ C'est finalement le bon";
-  rejectButton.disabled = true;
-  rejectButton.textContent = "✕ Résultat écarté";
-
-  document.getElementById("webSearchButton").style.display = "block";
-  titleInput.focus();
-}
-
-async function lookupDVDByEAN(ean){
-  ean = String(ean || "").replace(/\D/g, "");
-  if(!ean) return;
-
+function renderCandidates(ean, sourceStates){
+  const container = document.getElementById("lookupCandidates");
+  const summary = document.getElementById("lookupSummary");
   const status = document.getElementById("lookupStatus");
-  const preview = document.getElementById("lookupPreview");
-  const titleInput = document.getElementById("titleInput");
   const webSearchButton = document.getElementById("webSearchButton");
 
-  currentLookup = null;
-  titleInput.value = "";
-  preview.style.display = "none";
-  webSearchButton.style.display = "block";
-  status.textContent = "Recherche d'un résultat dans le catalogue BnF…";
+  container.innerHTML = "";
 
+  if(!currentCandidates.length){
+    summary.style.display = "block";
+    summary.textContent =
+      "Aucune source intégrée n'a donné de résultat exploitable. Vous pouvez saisir le titre vous-même ou lancer une recherche web manuelle.";
+    webSearchButton.style.display = "block";
+    status.textContent = "Aucun résultat fiable trouvé.";
+    document.getElementById("titleInput").focus();
+    return;
+  }
+
+  const normalized = currentCandidates
+    .map(c => normalizeTitle(c.title))
+    .filter(Boolean);
+
+  const uniqueTitles = [...new Set(normalized)];
+  const successfulSources = sourceStates.filter(s => s.ok).length;
+
+  summary.style.display = "block";
+
+  if(successfulSources >= 2 && uniqueTitles.length === 1){
+    summary.textContent =
+      "✓ Les sources consultées donnent le même titre. Vérifiez la jaquette puis choisissez le résultat.";
+  }else if(currentCandidates.length > 1){
+    summary.textContent =
+      "⚠ Les sources ne sont pas parfaitement concordantes. Rien n'est enregistré automatiquement : choisissez le bon DVD.";
+  }else{
+    summary.textContent =
+      "Un seul résultat a été trouvé. Vérifiez-le avant de le choisir.";
+  }
+
+  currentCandidates.forEach((candidate, index)=>{
+    const card = document.createElement("div");
+    card.className = "lookup-candidate";
+
+    const meta = [candidate.year, candidate.creator, candidate.publisher]
+      .filter(Boolean)
+      .join(" · ");
+
+    card.innerHTML = `
+      <div class="lookup-candidate-top">
+        ${candidate.coverUrl
+          ? `<img src="${escapeHtml(candidate.coverUrl)}" alt="" onerror="this.style.display='none'">`
+          : `<div style="width:58px;height:82px;border-radius:8px;background:#ececf3;flex:0 0 auto"></div>`
+        }
+        <div style="min-width:0;flex:1">
+          <div class="lookup-source">${escapeHtml(candidate.source)}</div>
+          <div class="lookup-candidate-title">${escapeHtml(candidate.title || "Titre non renseigné")}</div>
+          ${meta ? `<div class="meta">${escapeHtml(meta)}</div>` : ""}
+        </div>
+      </div>
+      <button class="primary" onclick="chooseCandidate(${index})">Choisir ce DVD</button>
+    `;
+
+    container.appendChild(card);
+  });
+
+  webSearchButton.style.display = "block";
+  status.textContent =
+    `${currentCandidates.length} proposition${currentCandidates.length > 1 ? "s" : ""} trouvée${currentCandidates.length > 1 ? "s" : ""}.`;
+}
+
+async function lookupUPCItemDB(ean){
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 9000);
+  const timeout = setTimeout(() => controller.abort(), 8000);
+
+  try{
+    const url =
+      "https://api.upcitemdb.com/prod/trial/lookup?upc=" +
+      encodeURIComponent(ean);
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: { "Accept": "application/json" },
+      signal: controller.signal
+    });
+
+    if(response.status === 429){
+      return { ok:false, source:"UPCitemdb", reason:"quota" };
+    }
+
+    if(!response.ok){
+      return { ok:false, source:"UPCitemdb", reason:"http-" + response.status };
+    }
+
+    const data = await response.json();
+    const item = data && Array.isArray(data.items) ? data.items[0] : null;
+
+    if(!item || !item.title){
+      return { ok:false, source:"UPCitemdb", reason:"not-found" };
+    }
+
+    const image =
+      (Array.isArray(item.images) && item.images.length ? item.images[0] : "") ||
+      item.image || "";
+
+    return {
+      ok:true,
+      source:"UPCitemdb",
+      candidate:{
+        ean,
+        title:String(item.title || "").trim(),
+        creator:"",
+        year:"",
+        publisher:String(item.brand || "").trim(),
+        coverUrl:image,
+        source:"UPCitemdb"
+      }
+    };
+  }catch(error){
+    console.warn("UPCitemdb:", error);
+    return { ok:false, source:"UPCitemdb", reason:"network" };
+  }finally{
+    clearTimeout(timeout);
+  }
+}
+
+async function lookupBNF(ean){
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
 
   try{
     const query = `bib.ean adj "${ean}"`;
@@ -1534,32 +1685,28 @@ async function lookupDVDByEAN(ean){
       "&operation=searchRetrieve" +
       "&query=" + encodeURIComponent(query) +
       "&recordSchema=dublincore" +
-      "&maximumRecords=3";
+      "&maximumRecords=1";
 
     const response = await fetch(url, {
-      method: "GET",
-      mode: "cors",
-      signal: controller.signal
+      method:"GET",
+      mode:"cors",
+      signal:controller.signal
     });
 
     if(!response.ok){
-      throw new Error("HTTP " + response.status);
+      return { ok:false, source:"BnF", reason:"http-" + response.status };
     }
 
     const xmlText = await response.text();
     const xml = new DOMParser().parseFromString(xmlText, "application/xml");
 
     if(xml.getElementsByTagName("parsererror").length){
-      throw new Error("Réponse BnF illisible");
+      return { ok:false, source:"BnF", reason:"parse" };
     }
 
     const total = parseInt(firstXmlText(xml, "numberOfRecords") || "0", 10);
-
     if(!total){
-      status.textContent =
-        "Aucun résultat BnF. Utilisez « Rechercher cet EAN sur le web » ou saisissez le titre.";
-      titleInput.focus();
-      return;
+      return { ok:false, source:"BnF", reason:"not-found" };
     }
 
     const titles = allXmlTexts(xml, "title");
@@ -1568,68 +1715,103 @@ async function lookupDVDByEAN(ean){
     const publishers = allXmlTexts(xml, "publisher");
 
     const title = titles[0] || "";
-    const creator = creators[0] || "";
+    if(!title){
+      return { ok:false, source:"BnF", reason:"no-title" };
+    }
+
     const dateText = dates[0] || "";
     const yearMatch = dateText.match(/\b(19|20)\d{2}\b/);
-    const year = yearMatch ? yearMatch[0] : "";
-    const publisher = publishers[0] || "";
 
-    const coverUrl =
-      "https://openapi.bnf.fr/couverture/image/image/recupererImage" +
-      "?EAN=" + encodeURIComponent(ean) +
-      "&couverture=1" +
-      "&taille=originale" +
-      "&largeur=500" +
-      "&hauteur=500";
-
-    currentLookup = {
-      ean,
-      title,
-      creator,
-      year,
-      publisher,
-      coverUrl,
-      source: "BnF",
-      confirmed: false,
-      rejected: false,
-      bnfResultCount: total
+    return {
+      ok:true,
+      source:"BnF",
+      candidate:{
+        ean,
+        title,
+        creator:creators[0] || "",
+        year:yearMatch ? yearMatch[0] : "",
+        publisher:publishers[0] || "",
+        coverUrl:
+          "https://openapi.bnf.fr/couverture/image/image/recupererImage" +
+          "?EAN=" + encodeURIComponent(ean) +
+          "&couverture=1" +
+          "&taille=originale" +
+          "&largeur=500" +
+          "&hauteur=500",
+        source:"BnF"
+      }
     };
-
-    document.getElementById("lookupTitle").textContent = title || "Résultat BnF";
-    document.getElementById("lookupMeta").textContent =
-      [year, creator, publisher].filter(Boolean).join(" · ");
-
-    const img = document.getElementById("lookupCover");
-    img.src = coverUrl;
-    img.style.display = "block";
-    img.onerror = function(){ this.style.display = "none"; };
-
-    setLookupBadge("candidate");
-
-    const confirmButton = document.getElementById("confirmLookupButton");
-    const rejectButton = document.getElementById("rejectLookupButton");
-
-    confirmButton.disabled = false;
-    confirmButton.textContent = "✓ C'est le bon DVD";
-    rejectButton.disabled = false;
-    rejectButton.textContent = "✕ Ce n'est pas le bon";
-
-    preview.style.display = "block";
-
-    if(total > 1){
-      status.textContent =
-        `${total} notices BnF correspondent à cet EAN. Vérifiez le résultat avant de le confirmer.`;
-    }else{
-      status.textContent =
-        "Résultat proposé par la BnF — il n'est PAS enregistré tant que vous ne le confirmez pas.";
-    }
   }catch(error){
-    console.error("Recherche BnF:", error);
-    status.textContent =
-      "La BnF n'a pas répondu. Utilisez « Rechercher cet EAN sur le web » ou saisissez le titre.";
-    titleInput.focus();
+    console.warn("BnF:", error);
+    return { ok:false, source:"BnF", reason:"network" };
   }finally{
     clearTimeout(timeout);
+  }
+}
+
+async function lookupDVDByEAN(ean){
+  ean = String(ean || "").replace(/\D/g, "");
+  if(!ean) return;
+
+  const status = document.getElementById("lookupStatus");
+  const titleInput = document.getElementById("titleInput");
+  const candidates = document.getElementById("lookupCandidates");
+  const summary = document.getElementById("lookupSummary");
+
+  currentLookup = null;
+  currentCandidates = [];
+  titleInput.value = "";
+  candidates.innerHTML = "";
+  summary.style.display = "none";
+  status.textContent = "Recherche dans UPCitemdb et la BnF…";
+
+  const cache = loadLookupCache();
+
+  if(cache[ean] && Array.isArray(cache[ean].candidates)){
+    currentCandidates = cache[ean].candidates;
+    renderCandidates(ean, cache[ean].sourceStates || []);
+    status.textContent += " (résultat mémorisé)";
+    return;
+  }
+
+  const results = await Promise.allSettled([
+    lookupUPCItemDB(ean),
+    lookupBNF(ean)
+  ]);
+
+  const sourceStates = results.map((result, index)=>{
+    if(result.status === "fulfilled") return result.value;
+    return {
+      ok:false,
+      source:index === 0 ? "UPCitemdb" : "BnF",
+      reason:"error"
+    };
+  });
+
+  const seen = new Set();
+  currentCandidates = [];
+
+  sourceStates.forEach(state=>{
+    if(!state.ok || !state.candidate || !state.candidate.title) return;
+
+    const key = state.source + "|" + normalizeTitle(state.candidate.title);
+    if(seen.has(key)) return;
+    seen.add(key);
+    currentCandidates.push(state.candidate);
+  });
+
+  cache[ean] = {
+    savedAt: Date.now(),
+    candidates: currentCandidates,
+    sourceStates
+  };
+  saveLookupCache(cache);
+
+  renderCandidates(ean, sourceStates);
+
+  const upcState = sourceStates.find(s => s.source === "UPCitemdb");
+  if(upcState && upcState.reason === "quota"){
+    status.textContent += " UPCitemdb a atteint sa limite gratuite du jour.";
   }
 }
 
