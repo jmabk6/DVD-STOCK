@@ -200,8 +200,6 @@ header p{
 
 .lookup-preview{
   display:none;
-  gap:12px;
-  align-items:flex-start;
   margin:10px 0 6px;
   padding:10px;
   border:1px solid var(--line);
@@ -215,6 +213,47 @@ header p{
   object-fit:cover;
   border-radius:8px;
   background:#ececf3;
+}
+
+.lookup-preview-main{
+  display:flex;
+  gap:12px;
+  align-items:flex-start;
+}
+
+.lookup-actions{
+  display:flex;
+  gap:8px;
+  flex-wrap:wrap;
+  margin-top:10px;
+}
+
+.lookup-actions button{
+  flex:1 1 145px;
+  margin:0;
+}
+
+.lookup-warning{
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  padding:5px 8px;
+  margin-bottom:7px;
+  border-radius:999px;
+  font-size:11px;
+  font-weight:800;
+  background:#fff4d8;
+  color:#7a5700;
+}
+
+.lookup-ok{
+  background:#eaf8ef;
+  color:#18733b;
+}
+
+.lookup-rejected{
+  background:#f1f1f5;
+  color:#666777;
 }
 
 
@@ -670,12 +709,31 @@ Scannez l'EAN : l'application tente ensuite de retrouver automatiquement le DVD 
 <div id="lookupStatus" class="lookup-status"></div>
 
 <div id="lookupPreview" class="lookup-preview">
-  <img id="lookupCover" alt="">
-  <div>
-    <strong id="lookupTitle"></strong>
-    <div id="lookupMeta" class="meta" style="margin-top:5px"></div>
+  <div class="lookup-preview-main">
+    <img id="lookupCover" alt="">
+    <div style="min-width:0;flex:1">
+      <div id="lookupBadge" class="lookup-warning">⚠ Résultat à confirmer</div>
+      <strong id="lookupTitle"></strong>
+      <div id="lookupMeta" class="meta" style="margin-top:5px"></div>
+    </div>
+  </div>
+
+  <div id="lookupActions" class="lookup-actions">
+    <button id="confirmLookupButton" class="primary" onclick="confirmLookup()">
+      ✓ C'est le bon DVD
+    </button>
+    <button id="rejectLookupButton" class="secondary" onclick="rejectLookup()">
+      ✕ Ce n'est pas le bon
+    </button>
   </div>
 </div>
+
+<button id="webSearchButton"
+        class="secondary"
+        onclick="searchEANOnWeb()"
+        style="display:none;margin-bottom:10px;">
+  🔎 Rechercher cet EAN sur le web
+</button>
 
 <input id="eanInput"
        inputmode="numeric"
@@ -683,7 +741,7 @@ Scannez l'EAN : l'application tente ensuite de retrouver automatiquement le DVD 
        onchange="lookupDVDByEAN(this.value.trim())">
 
 <input id="titleInput"
-       placeholder="Titre du DVD">
+       placeholder="Titre retenu (obligatoire)">
 
 <input id="priceInput"
        inputmode="decimal"
@@ -829,8 +887,10 @@ function closeScanner(){
 
   const lookupStatus = document.getElementById("lookupStatus");
   const lookupPreview = document.getElementById("lookupPreview");
+  const webSearchButton = document.getElementById("webSearchButton");
   if(lookupStatus) lookupStatus.textContent = "";
   if(lookupPreview) lookupPreview.style.display = "none";
+  if(webSearchButton) webSearchButton.style.display = "none";
 }
 
 
@@ -864,11 +924,11 @@ function addDVD(){
     title:title,
     estimateMin:price,
     estimateMax:price,
-    coverUrl: currentLookup?.coverUrl || "",
-    year: currentLookup?.year || "",
-    creator: currentLookup?.creator || "",
-    publisher: currentLookup?.publisher || "",
-    source: currentLookup?.source || "",
+    coverUrl: currentLookup?.confirmed ? (currentLookup.coverUrl || "") : "",
+    year: currentLookup?.confirmed ? (currentLookup.year || "") : "",
+    creator: currentLookup?.confirmed ? (currentLookup.creator || "") : "",
+    publisher: currentLookup?.confirmed ? (currentLookup.publisher || "") : "",
+    source: currentLookup?.confirmed ? (currentLookup.source || "BnF") : "manuel",
     boxId:box.id,
     position:existing.length+1,
     status:"sale",
@@ -1354,6 +1414,100 @@ function allXmlTexts(root, localName){
     .filter(Boolean);
 }
 
+function resetLookupUI(){
+  currentLookup = null;
+
+  const status = document.getElementById("lookupStatus");
+  const preview = document.getElementById("lookupPreview");
+  const webSearchButton = document.getElementById("webSearchButton");
+  const titleInput = document.getElementById("titleInput");
+
+  if(status) status.textContent = "";
+  if(preview) preview.style.display = "none";
+  if(webSearchButton) webSearchButton.style.display = "none";
+  if(titleInput) titleInput.value = "";
+}
+
+function setLookupBadge(mode){
+  const badge = document.getElementById("lookupBadge");
+  if(!badge) return;
+
+  badge.className = "lookup-warning";
+
+  if(mode === "confirmed"){
+    badge.classList.add("lookup-ok");
+    badge.textContent = "✓ Identification confirmée";
+  }else if(mode === "rejected"){
+    badge.classList.add("lookup-rejected");
+    badge.textContent = "Résultat rejeté";
+  }else{
+    badge.textContent = "⚠ Résultat à confirmer";
+  }
+}
+
+function searchEANOnWeb(){
+  const ean = String(document.getElementById("eanInput").value || "").replace(/\D/g, "");
+  if(!ean){
+    alert("Scannez ou saisissez d'abord un EAN.");
+    return;
+  }
+
+  const query = `"${ean}" DVD`;
+  window.open(
+    "https://www.google.com/search?q=" + encodeURIComponent(query),
+    "_blank",
+    "noopener,noreferrer"
+  );
+}
+
+function confirmLookup(){
+  if(!currentLookup || !currentLookup.title) return;
+
+  currentLookup.confirmed = true;
+  currentLookup.rejected = false;
+
+  document.getElementById("titleInput").value = currentLookup.title;
+  document.getElementById("lookupStatus").textContent =
+    "Identification confirmée. Vous pouvez ajouter le DVD à la caisse.";
+
+  setLookupBadge("confirmed");
+
+  const confirmButton = document.getElementById("confirmLookupButton");
+  const rejectButton = document.getElementById("rejectLookupButton");
+
+  confirmButton.disabled = true;
+  confirmButton.textContent = "✓ Confirmé";
+  rejectButton.disabled = false;
+
+  document.getElementById("titleInput").focus();
+}
+
+function rejectLookup(){
+  if(!currentLookup) return;
+
+  currentLookup.confirmed = false;
+  currentLookup.rejected = true;
+
+  const titleInput = document.getElementById("titleInput");
+  titleInput.value = "";
+
+  document.getElementById("lookupStatus").textContent =
+    "Résultat écarté. Recherchez l'EAN sur le web ou saisissez directement le bon titre.";
+
+  setLookupBadge("rejected");
+
+  const confirmButton = document.getElementById("confirmLookupButton");
+  const rejectButton = document.getElementById("rejectLookupButton");
+
+  confirmButton.disabled = false;
+  confirmButton.textContent = "✓ C'est finalement le bon";
+  rejectButton.disabled = true;
+  rejectButton.textContent = "✕ Résultat écarté";
+
+  document.getElementById("webSearchButton").style.display = "block";
+  titleInput.focus();
+}
+
 async function lookupDVDByEAN(ean){
   ean = String(ean || "").replace(/\D/g, "");
   if(!ean) return;
@@ -1361,10 +1515,13 @@ async function lookupDVDByEAN(ean){
   const status = document.getElementById("lookupStatus");
   const preview = document.getElementById("lookupPreview");
   const titleInput = document.getElementById("titleInput");
+  const webSearchButton = document.getElementById("webSearchButton");
 
   currentLookup = null;
+  titleInput.value = "";
   preview.style.display = "none";
-  status.textContent = "Recherche du DVD dans le catalogue BnF…";
+  webSearchButton.style.display = "block";
+  status.textContent = "Recherche d'un résultat dans le catalogue BnF…";
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 9000);
@@ -1377,7 +1534,7 @@ async function lookupDVDByEAN(ean){
       "&operation=searchRetrieve" +
       "&query=" + encodeURIComponent(query) +
       "&recordSchema=dublincore" +
-      "&maximumRecords=1";
+      "&maximumRecords=3";
 
     const response = await fetch(url, {
       method: "GET",
@@ -1397,8 +1554,10 @@ async function lookupDVDByEAN(ean){
     }
 
     const total = parseInt(firstXmlText(xml, "numberOfRecords") || "0", 10);
+
     if(!total){
-      status.textContent = "EAN scanné, mais aucune fiche BnF trouvée. Saisissez le titre manuellement.";
+      status.textContent =
+        "Aucun résultat BnF. Utilisez « Rechercher cet EAN sur le web » ou saisissez le titre.";
       titleInput.focus();
       return;
     }
@@ -1430,14 +1589,13 @@ async function lookupDVDByEAN(ean){
       year,
       publisher,
       coverUrl,
-      source: "BnF"
+      source: "BnF",
+      confirmed: false,
+      rejected: false,
+      bnfResultCount: total
     };
 
-    if(title){
-      titleInput.value = title;
-    }
-
-    document.getElementById("lookupTitle").textContent = title || "DVD trouvé";
+    document.getElementById("lookupTitle").textContent = title || "Résultat BnF";
     document.getElementById("lookupMeta").textContent =
       [year, creator, publisher].filter(Boolean).join(" · ");
 
@@ -1446,12 +1604,29 @@ async function lookupDVDByEAN(ean){
     img.style.display = "block";
     img.onerror = function(){ this.style.display = "none"; };
 
-    preview.style.display = "flex";
-    status.textContent = "DVD trouvé automatiquement ✓";
+    setLookupBadge("candidate");
+
+    const confirmButton = document.getElementById("confirmLookupButton");
+    const rejectButton = document.getElementById("rejectLookupButton");
+
+    confirmButton.disabled = false;
+    confirmButton.textContent = "✓ C'est le bon DVD";
+    rejectButton.disabled = false;
+    rejectButton.textContent = "✕ Ce n'est pas le bon";
+
+    preview.style.display = "block";
+
+    if(total > 1){
+      status.textContent =
+        `${total} notices BnF correspondent à cet EAN. Vérifiez le résultat avant de le confirmer.`;
+    }else{
+      status.textContent =
+        "Résultat proposé par la BnF — il n'est PAS enregistré tant que vous ne le confirmez pas.";
+    }
   }catch(error){
     console.error("Recherche BnF:", error);
     status.textContent =
-      "EAN scanné. La recherche automatique n'a pas répondu ; vous pouvez saisir le titre manuellement.";
+      "La BnF n'a pas répondu. Utilisez « Rechercher cet EAN sur le web » ou saisissez le titre.";
     titleInput.focus();
   }finally{
     clearTimeout(timeout);
