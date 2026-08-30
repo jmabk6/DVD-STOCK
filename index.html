@@ -528,6 +528,9 @@ header p{
   display:none;
   align-items:flex-end;
   justify-content:center;
+  overflow-y:auto;
+  -webkit-overflow-scrolling:touch;
+  overscroll-behavior:contain;
 }
 
 .modal.active{display:flex}
@@ -536,7 +539,10 @@ header p{
   width:min(520px,100%);
   background:white;
   border-radius:22px 22px 0 0;
-  padding:22px 18px 30px;
+  padding:22px 18px calc(30px + env(safe-area-inset-bottom));
+  max-height:calc(100dvh - 10px);
+  overflow-y:auto;
+  -webkit-overflow-scrolling:touch;
 }
 
 .modal-content h2{margin-top:0}
@@ -662,12 +668,16 @@ header p{
   border-radius:14px;
   overflow:hidden;
   background:#111;
+  display:flex;
+  align-items:center;
+  justify-content:center;
 }
 #coverLiveVideo{
   display:block;
   width:100%;
-  max-height:62vh;
-  object-fit:cover;
+  height:auto;
+  max-height:46dvh;
+  object-fit:contain;
   background:#111;
 }
 .cover-guide{
@@ -682,6 +692,11 @@ header p{
   display:flex;
   gap:8px;
   margin-top:10px;
+  position:sticky;
+  bottom:0;
+  z-index:3;
+  background:white;
+  padding:8px 0 2px;
 }
 .cover-live-actions button{
   flex:1;
@@ -1928,6 +1943,10 @@ async function startCoverCamera(){
     button.style.display = "none";
 
     await video.play().catch(()=>{});
+
+    setTimeout(()=>{
+      live.scrollIntoView({behavior:"smooth", block:"center"});
+    },150);
   }catch(error){
     console.error("Caméra jaquette:", error);
     alert("Impossible d'ouvrir la caméra pour la jaquette. Vérifiez l'autorisation caméra dans Safari.");
