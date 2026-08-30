@@ -565,7 +565,8 @@ header p{
   }
 }
 
-.photo-zone{
+
+.cover-scan-zone{
   margin:10px 0 12px;
   padding:12px;
   border:1px solid var(--line);
@@ -573,78 +574,87 @@ header p{
   background:#fafaff;
 }
 
-.photo-preview{
+.cover-scan-stage{
   display:none;
+  margin-top:10px;
+}
+
+.cover-scan-wrap{
+  position:relative;
   width:100%;
-  max-height:330px;
+  border-radius:14px;
+  overflow:hidden;
+  background:#111;
+  touch-action:none;
+}
+
+#coverScanCanvas{
+  display:block;
+  width:100%;
+  height:auto;
+}
+
+.cover-scan-status{
+  min-height:18px;
+  margin-top:8px;
+  font-size:12px;
+  color:var(--muted);
+}
+
+.cover-scan-actions{
+  display:flex;
+  gap:8px;
+  flex-wrap:wrap;
+  margin-top:10px;
+}
+
+.cover-scan-actions button{
+  flex:1 1 140px;
+  margin:0;
+}
+
+.cover-final{
+  display:none;
+  margin-top:10px;
+}
+
+.cover-final img{
+  display:block;
+  width:100%;
+  max-height:360px;
   object-fit:contain;
   border-radius:12px;
-  margin-top:10px;
   background:#111;
 }
 
-.ocr-progress{
-  margin-top:9px;
+.voice-row{
+  display:flex;
+  gap:8px;
+  align-items:center;
+  margin-top:8px;
+}
+
+.voice-row input{
+  flex:1;
+  margin:0;
+}
+
+.voice-row button{
+  flex:0 0 auto;
+  margin:0;
+  min-width:56px;
+}
+
+.voice-status{
+  min-height:18px;
+  margin-top:6px;
   font-size:12px;
   color:var(--muted);
-  min-height:18px;
 }
-
-.ocr-lines{
-  display:flex;
-  gap:7px;
-  flex-wrap:wrap;
-  margin-top:9px;
-}
-
-.ocr-line{
-  border:1px solid var(--line);
-  background:#fff;
-  color:var(--text);
-  border-radius:999px;
-  padding:7px 10px;
-  font-size:12px;
-  font-weight:700;
-}
-
-.photo-results{
-  display:grid;
-  gap:10px;
-  margin-top:10px;
-}
-
-.photo-result{
-  border:1px solid var(--line);
-  border-radius:14px;
-  padding:10px;
-  background:#fff;
-}
-
-.photo-result-main{
-  display:flex;
-  gap:10px;
-  align-items:flex-start;
-}
-
-.photo-result img{
-  width:62px;
-  height:88px;
-  object-fit:cover;
-  border-radius:8px;
-  background:#ececf3;
-  flex:0 0 auto;
-}
-
-.photo-result-title{
-  font-weight:800;
-  line-height:1.25;
-  margin-bottom:4px;
-}
-
 </style>
 
 <script type="text/javascript" src="https://unpkg.com/@zxing/browser@latest"></script>
-<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script async src="https://docs.opencv.org/4.x/opencv.js"></script>
 </head>
 
 <body>
@@ -844,10 +854,10 @@ header p{
 Scannez l'EAN : l'application tente ensuite de retrouver automatiquement le DVD dans le catalogue BnF.
 </div>
 
-<div class="photo-zone">
-  <strong>1. Photographiez la jaquette avant</strong>
+<div class="cover-scan-zone">
+  <strong>1. Scanner la jaquette</strong>
   <div class="meta" style="margin-top:5px">
-    L'application lit le titre sur la photo, puis cherche des films correspondants.
+    Photographiez la face avant. L'app cherche les 4 bords, redresse la perspective et vous laisse corriger les coins.
   </div>
 
   <input id="coverPhotoInput"
@@ -855,34 +865,56 @@ Scannez l'EAN : l'application tente ensuite de retrouver automatiquement le DVD 
          accept="image/*"
          capture="environment"
          style="display:none"
-         onchange="handleCoverPhoto(this.files && this.files[0])">
+         onchange="handleCoverScan(this.files && this.files[0])">
 
   <button class="primary"
           onclick="document.getElementById('coverPhotoInput').click()"
           style="margin-top:10px">
-    📷 Photographier la jaquette
+    📷 Scanner la jaquette
   </button>
 
-  <img id="coverPhotoPreview" class="photo-preview" alt="Jaquette photographiée">
+  <div id="coverScanStage" class="cover-scan-stage">
+    <div class="cover-scan-wrap">
+      <canvas id="coverScanCanvas"></canvas>
+    </div>
+    <div id="coverScanStatus" class="cover-scan-status"></div>
 
-  <div id="ocrProgress" class="ocr-progress"></div>
-  <div id="ocrLines" class="ocr-lines"></div>
-  <div id="photoResults" class="photo-results"></div>
+    <div class="cover-scan-actions">
+      <button class="secondary" onclick="resetDetectedCorners()">↺ Refaire les coins</button>
+      <button class="primary" onclick="validateCoverCrop()">✓ Valider le recadrage</button>
+    </div>
+  </div>
+
+  <div id="coverFinal" class="cover-final">
+    <div class="meta" style="margin-bottom:6px">Jaquette recadrée :</div>
+    <img id="coverFinalImage" alt="Jaquette recadrée">
+  </div>
 </div>
 
-<div class="meta" style="margin:8px 0">
-  2. Le code-barres est conservé comme référence produit.
+<div class="meta" style="margin:8px 0 4px">
+  2. Scanner le code-barres
 </div>
 
 <div id="lookupStatus" class="lookup-status"></div>
 
 <input id="eanInput"
        inputmode="numeric"
-       placeholder="Code-barres EAN"
-       onchange="lookupDVDByEAN(this.value.trim())">
+       placeholder="Code-barres EAN">
 
-<input id="titleInput"
-       placeholder="Titre retenu (obligatoire)">
+<div class="meta" style="margin:10px 0 4px">
+  3. Dicter ou saisir le titre
+</div>
+
+<div class="voice-row">
+  <input id="titleInput"
+         placeholder="Titre du DVD">
+  <button id="voiceButton"
+          class="secondary"
+          type="button"
+          onclick="startVoiceTitle()"
+          title="Dicter le titre">🎤</button>
+</div>
+<div id="voiceStatus" class="voice-status"></div>
 
 <input id="priceInput"
        inputmode="decimal"
@@ -1032,6 +1064,66 @@ function closeScanner(){
 }
 
 
+
+const PHOTO_DB_NAME = "dvdstock_photos";
+const PHOTO_STORE = "covers";
+
+function openPhotoDB(){
+  return new Promise((resolve,reject)=>{
+    const request = indexedDB.open(PHOTO_DB_NAME,1);
+
+    request.onupgradeneeded = ()=>{
+      const db = request.result;
+      if(!db.objectStoreNames.contains(PHOTO_STORE)){
+        db.createObjectStore(PHOTO_STORE);
+      }
+    };
+
+    request.onsuccess = ()=>resolve(request.result);
+    request.onerror = ()=>reject(request.error);
+  });
+}
+
+async function saveCoverBlob(dvdId, blob){
+  if(!blob) return;
+
+  const db = await openPhotoDB();
+  await new Promise((resolve,reject)=>{
+    const tx = db.transaction(PHOTO_STORE,"readwrite");
+    tx.objectStore(PHOTO_STORE).put(blob,dvdId);
+    tx.oncomplete = ()=>resolve();
+    tx.onerror = ()=>reject(tx.error);
+  });
+
+  db.close();
+}
+
+async function getCoverBlob(dvdId){
+  const db = await openPhotoDB();
+  const blob = await new Promise((resolve,reject)=>{
+    const tx = db.transaction(PHOTO_STORE,"readonly");
+    const req = tx.objectStore(PHOTO_STORE).get(dvdId);
+    req.onsuccess = ()=>resolve(req.result || null);
+    req.onerror = ()=>reject(req.error);
+  });
+
+  db.close();
+  return blob;
+}
+
+async function deleteCoverBlob(dvdId){
+  const db = await openPhotoDB();
+
+  await new Promise((resolve,reject)=>{
+    const tx = db.transaction(PHOTO_STORE,"readwrite");
+    tx.objectStore(PHOTO_STORE).delete(dvdId);
+    tx.oncomplete = ()=>resolve();
+    tx.onerror = ()=>reject(tx.error);
+  });
+
+  db.close();
+}
+
 function addDVD(){
 
   const ean=document.getElementById("eanInput").value.trim();
@@ -1042,8 +1134,18 @@ function addDVD(){
     document.getElementById("priceInput").value.replace(",",".")
   ) || 0;
 
+  if(!coverCroppedBlob){
+    alert("Scannez puis validez d'abord la jaquette.");
+    return;
+  }
+
+  if(!ean){
+    alert("Scannez le code-barres du DVD.");
+    return;
+  }
+
   if(!title){
-    alert("Indiquez au minimum le titre du DVD.");
+    alert("Dictez ou saisissez le titre du DVD.");
     return;
   }
 
@@ -1062,11 +1164,12 @@ function addDVD(){
     title:title,
     estimateMin:price,
     estimateMax:price,
-    coverUrl: currentLookup?.confirmed ? (currentLookup.coverUrl || "") : "",
-    year: currentLookup?.confirmed ? (currentLookup.year || "") : "",
-    creator: currentLookup?.confirmed ? (currentLookup.creator || "") : "",
-    publisher: currentLookup?.confirmed ? (currentLookup.publisher || "") : "",
-    source: currentLookup?.confirmed ? (currentLookup.source || "photo") : "manuel",
+    coverUrl:"",
+    hasCover:true,
+    year:"",
+    creator:"",
+    publisher:"",
+    source:"scan-jaquette",
     boxId:box.id,
     position:existing.length+1,
     status:"sale",
@@ -1077,6 +1180,11 @@ function addDVD(){
   dvds.unshift(dvd);
 
   save();
+
+  const photoToSave = coverCroppedBlob;
+  saveCoverBlob(dvd.id, photoToSave).catch(error=>{
+    console.error("Enregistrement jaquette :", error);
+  });
 
   closeScanner();
 
@@ -1213,7 +1321,7 @@ function openDVD(id){
 
     <div class="detail-top">
 
-      <div class="detail-cover"></div>
+      <div class="detail-cover" id="detailCoverImage"></div>
 
       <div>
 
@@ -1273,6 +1381,18 @@ function openDVD(id){
   `;
 
   go("detail");
+
+  if(dvd.hasCover){
+    getCoverBlob(dvd.id).then(blob=>{
+      if(!blob) return;
+
+      const holder=document.getElementById("detailCoverImage");
+      if(!holder) return;
+
+      const url=URL.createObjectURL(blob);
+      holder.innerHTML=`<img src="${url}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:12px">`;
+    }).catch(error=>console.error("Lecture jaquette :",error));
+  }
 }
 
 
@@ -1311,6 +1431,8 @@ function deleteDVD(id){
   dvds=dvds.filter(d=>d.id!==id);
 
   save();
+
+  deleteCoverBlob(id).catch(error=>console.error("Suppression jaquette :",error));
 
   go("stock",document.querySelectorAll(".nav")[1]);
 }
@@ -1540,312 +1662,498 @@ function renderAll(){
 
 
 
+
 let currentLookup = null;
-let currentCandidates = [];
-let currentPhotoObjectUrl = null;
+let coverOriginalImage = null;
+let coverDisplayCorners = [];
+let coverInitialCorners = [];
+let coverDraggingCorner = -1;
+let coverCroppedBlob = null;
+let coverCroppedUrl = "";
+let voiceRecognition = null;
 
 function resetLookupUI(){
   currentLookup = null;
-  currentCandidates = [];
+  coverOriginalImage = null;
+  coverDisplayCorners = [];
+  coverInitialCorners = [];
+  coverDraggingCorner = -1;
+  coverCroppedBlob = null;
+
+  if(coverCroppedUrl){
+    URL.revokeObjectURL(coverCroppedUrl);
+    coverCroppedUrl = "";
+  }
 
   const status = document.getElementById("lookupStatus");
   const titleInput = document.getElementById("titleInput");
-  const preview = document.getElementById("coverPhotoPreview");
-  const progress = document.getElementById("ocrProgress");
-  const lines = document.getElementById("ocrLines");
-  const results = document.getElementById("photoResults");
   const photoInput = document.getElementById("coverPhotoInput");
+  const stage = document.getElementById("coverScanStage");
+  const finalBox = document.getElementById("coverFinal");
+  const finalImage = document.getElementById("coverFinalImage");
+  const scanStatus = document.getElementById("coverScanStatus");
+  const voiceStatus = document.getElementById("voiceStatus");
 
   if(status) status.textContent = "";
   if(titleInput) titleInput.value = "";
-  if(progress) progress.textContent = "";
-  if(lines) lines.innerHTML = "";
-  if(results) results.innerHTML = "";
-  if(preview){
-    preview.style.display = "none";
-    preview.removeAttribute("src");
-  }
   if(photoInput) photoInput.value = "";
+  if(stage) stage.style.display = "none";
+  if(finalBox) finalBox.style.display = "none";
+  if(finalImage) finalImage.removeAttribute("src");
+  if(scanStatus) scanStatus.textContent = "";
+  if(voiceStatus) voiceStatus.textContent = "";
+}
 
-  if(currentPhotoObjectUrl){
-    URL.revokeObjectURL(currentPhotoObjectUrl);
-    currentPhotoObjectUrl = null;
+function waitForOpenCV(maxMs = 10000){
+  return new Promise((resolve, reject)=>{
+    const started = Date.now();
+
+    const test = ()=>{
+      if(window.cv && cv.Mat && cv.imread){
+        resolve();
+        return;
+      }
+      if(Date.now() - started > maxMs){
+        reject(new Error("OpenCV non chargé"));
+        return;
+      }
+      setTimeout(test, 120);
+    };
+
+    test();
+  });
+}
+
+function sortQuadPoints(points){
+  const pts = points.map(p=>({x:p.x, y:p.y}));
+  const sum = p=>p.x+p.y;
+  const diff = p=>p.x-p.y;
+
+  const tl = pts.reduce((a,b)=>sum(a)<sum(b)?a:b);
+  const br = pts.reduce((a,b)=>sum(a)>sum(b)?a:b);
+  const tr = pts.reduce((a,b)=>diff(a)>diff(b)?a:b);
+  const bl = pts.reduce((a,b)=>diff(a)<diff(b)?a:b);
+
+  return [tl, tr, br, bl];
+}
+
+function fallbackCorners(w,h){
+  const m = Math.round(Math.min(w,h) * 0.06);
+  return [
+    {x:m,y:m},
+    {x:w-m,y:m},
+    {x:w-m,y:h-m},
+    {x:m,y:h-m}
+  ];
+}
+
+function detectCoverCorners(canvas){
+  const src = cv.imread(canvas);
+  let gray = new cv.Mat();
+  let blur = new cv.Mat();
+  let edges = new cv.Mat();
+  let contours = new cv.MatVector();
+  let hierarchy = new cv.Mat();
+
+  try{
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+    cv.GaussianBlur(gray, blur, new cv.Size(5,5), 0, 0, cv.BORDER_DEFAULT);
+    cv.Canny(blur, edges, 60, 180);
+    cv.findContours(edges, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+
+    let best = null;
+    let bestArea = 0;
+    const minArea = canvas.width * canvas.height * 0.18;
+
+    for(let i=0;i<contours.size();i++){
+      const contour = contours.get(i);
+      const peri = cv.arcLength(contour, true);
+      const approx = new cv.Mat();
+
+      cv.approxPolyDP(contour, approx, 0.02 * peri, true);
+
+      if(approx.rows === 4){
+        const area = Math.abs(cv.contourArea(approx));
+        if(area > minArea && area > bestArea){
+          const pts = [];
+          for(let r=0;r<4;r++){
+            pts.push({
+              x: approx.intPtr(r,0)[0],
+              y: approx.intPtr(r,0)[1]
+            });
+          }
+          best = sortQuadPoints(pts);
+          bestArea = area;
+        }
+      }
+
+      approx.delete();
+      contour.delete();
+    }
+
+    return best || fallbackCorners(canvas.width, canvas.height);
+  }finally{
+    src.delete();
+    gray.delete();
+    blur.delete();
+    edges.delete();
+    contours.delete();
+    hierarchy.delete();
   }
 }
 
-function cleanOcrLine(line){
-  return String(line || "")
-    .replace(/[|_[\]{}<>]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
+function drawCoverOverlay(){
+  const canvas = document.getElementById("coverScanCanvas");
+  if(!canvas || !coverOriginalImage) return;
 
-function scoreOcrLine(line){
-  const cleaned = cleanOcrLine(line);
-  if(cleaned.length < 2 || cleaned.length > 55) return -999;
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  ctx.drawImage(coverOriginalImage, 0, 0, canvas.width, canvas.height);
 
-  const lower = cleaned.toLowerCase();
-  const stopWords = [
-    "dvd", "video", "dolby", "digital", "edition", "édition",
-    "zone", "pal", "stereo", "stéréo", "copyright", "studio",
-    "collection", "interdit", "tous publics", "version française",
-    "vf", "vost", "vostfr", "bonus"
-  ];
+  if(coverDisplayCorners.length !== 4) return;
 
-  if(stopWords.some(w => lower === w || lower.startsWith(w + " "))) return -100;
+  ctx.save();
 
-  const letters = (cleaned.match(/[A-Za-zÀ-ÿ]/g) || []).length;
-  const digits = (cleaned.match(/\d/g) || []).length;
-  const words = cleaned.split(/\s+/).length;
-  const upperLetters = (cleaned.match(/[A-ZÀ-Þ]/g) || []).length;
-  const upperRatio = letters ? upperLetters / letters : 0;
+  ctx.beginPath();
+  ctx.moveTo(coverDisplayCorners[0].x, coverDisplayCorners[0].y);
+  for(let i=1;i<4;i++) ctx.lineTo(coverDisplayCorners[i].x, coverDisplayCorners[i].y);
+  ctx.closePath();
 
-  let score = 0;
-  score += Math.min(letters, 30);
-  if(words >= 1 && words <= 7) score += 14;
-  if(words >= 2 && words <= 5) score += 8;
-  if(upperRatio > 0.55) score += 10;
-  if(digits > letters) score -= 20;
-  if(/[.!?]{2,}/.test(cleaned)) score -= 8;
+  ctx.lineWidth = Math.max(3, canvas.width * 0.008);
+  ctx.strokeStyle = "#7c6cff";
+  ctx.stroke();
 
-  return score;
-}
+  ctx.fillStyle = "rgba(0,0,0,.32)";
+  ctx.beginPath();
+  ctx.rect(0,0,canvas.width,canvas.height);
+  ctx.moveTo(coverDisplayCorners[0].x,coverDisplayCorners[0].y);
+  ctx.lineTo(coverDisplayCorners[3].x,coverDisplayCorners[3].y);
+  ctx.lineTo(coverDisplayCorners[2].x,coverDisplayCorners[2].y);
+  ctx.lineTo(coverDisplayCorners[1].x,coverDisplayCorners[1].y);
+  ctx.closePath();
+  try{ ctx.fill("evenodd"); }catch(e){}
 
-function extractLikelyTitles(text){
-  const rawLines = String(text || "")
-    .split(/\r?\n/)
-    .map(cleanOcrLine)
-    .filter(Boolean);
+  const radius = Math.max(10, canvas.width * 0.025);
+  coverDisplayCorners.forEach((p,idx)=>{
+    ctx.beginPath();
+    ctx.arc(p.x,p.y,radius,0,Math.PI*2);
+    ctx.fillStyle = "#fff";
+    ctx.fill();
+    ctx.lineWidth = Math.max(3, canvas.width * 0.007);
+    ctx.strokeStyle = "#5546d9";
+    ctx.stroke();
 
-  const unique = [];
-  const seen = new Set();
-
-  rawLines.forEach(line=>{
-    const key = line.toLowerCase();
-    if(seen.has(key)) return;
-    seen.add(key);
-    const score = scoreOcrLine(line);
-    if(score > 0) unique.push({ line, score });
+    ctx.fillStyle = "#5546d9";
+    ctx.font = `bold ${Math.max(11,canvas.width*.025)}px sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(String(idx+1), p.x, p.y);
   });
 
-  unique.sort((a,b)=>b.score-a.score);
-  return unique.slice(0, 7).map(x=>x.line);
+  ctx.restore();
 }
 
-async function handleCoverPhoto(file){
+async function handleCoverScan(file){
   if(!file) return;
 
-  const preview = document.getElementById("coverPhotoPreview");
-  const progress = document.getElementById("ocrProgress");
-  const linesBox = document.getElementById("ocrLines");
-  const results = document.getElementById("photoResults");
+  const stage = document.getElementById("coverScanStage");
+  const finalBox = document.getElementById("coverFinal");
+  const status = document.getElementById("coverScanStatus");
+  const canvas = document.getElementById("coverScanCanvas");
 
-  linesBox.innerHTML = "";
-  results.innerHTML = "";
+  finalBox.style.display = "none";
+  coverCroppedBlob = null;
 
-  if(currentPhotoObjectUrl) URL.revokeObjectURL(currentPhotoObjectUrl);
-  currentPhotoObjectUrl = URL.createObjectURL(file);
+  if(coverCroppedUrl){
+    URL.revokeObjectURL(coverCroppedUrl);
+    coverCroppedUrl = "";
+  }
 
-  preview.src = currentPhotoObjectUrl;
-  preview.style.display = "block";
+  status.textContent = "Chargement de la photo…";
+  stage.style.display = "block";
 
-  if(typeof Tesseract === "undefined"){
-    progress.textContent = "Le module de lecture de la photo n'a pas pu se charger.";
+  const imageUrl = URL.createObjectURL(file);
+  const img = new Image();
+
+  img.onload = async ()=>{
+    coverOriginalImage = img;
+
+    const maxW = 900;
+    const scale = Math.min(1, maxW / img.naturalWidth);
+    canvas.width = Math.round(img.naturalWidth * scale);
+    canvas.height = Math.round(img.naturalHeight * scale);
+
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(img,0,0,canvas.width,canvas.height);
+
+    try{
+      status.textContent = "Détection automatique des 4 bords…";
+      await waitForOpenCV();
+
+      coverDisplayCorners = detectCoverCorners(canvas);
+      coverInitialCorners = coverDisplayCorners.map(p=>({...p}));
+      drawCoverOverlay();
+
+      status.textContent =
+        "Contour détecté. Si besoin, déplacez les 4 points avec le doigt puis validez.";
+    }catch(error){
+      console.warn("Détection jaquette:", error);
+      coverDisplayCorners = fallbackCorners(canvas.width,canvas.height);
+      coverInitialCorners = coverDisplayCorners.map(p=>({...p}));
+      drawCoverOverlay();
+
+      status.textContent =
+        "Détection automatique indisponible. Ajustez les 4 coins manuellement puis validez.";
+    }
+  };
+
+  img.onerror = ()=>{
+    status.textContent = "Impossible d'ouvrir cette photo.";
+    URL.revokeObjectURL(imageUrl);
+  };
+
+  img.src = imageUrl;
+}
+
+function resetDetectedCorners(){
+  if(!coverInitialCorners.length) return;
+  coverDisplayCorners = coverInitialCorners.map(p=>({...p}));
+  drawCoverOverlay();
+}
+
+function pointerToCanvas(event){
+  const canvas = document.getElementById("coverScanCanvas");
+  const rect = canvas.getBoundingClientRect();
+
+  return {
+    x:(event.clientX - rect.left) * (canvas.width / rect.width),
+    y:(event.clientY - rect.top) * (canvas.height / rect.height)
+  };
+}
+
+function nearestCorner(point){
+  if(coverDisplayCorners.length !== 4) return -1;
+
+  let best = -1;
+  let bestDist = Infinity;
+
+  coverDisplayCorners.forEach((p,i)=>{
+    const d = Math.hypot(p.x-point.x, p.y-point.y);
+    if(d < bestDist){
+      bestDist = d;
+      best = i;
+    }
+  });
+
+  const canvas = document.getElementById("coverScanCanvas");
+  return bestDist <= Math.max(35,canvas.width*.08) ? best : -1;
+}
+
+function setupCoverCanvasEvents(){
+  const canvas = document.getElementById("coverScanCanvas");
+  if(!canvas || canvas.dataset.bound === "1") return;
+  canvas.dataset.bound = "1";
+
+  canvas.addEventListener("pointerdown", event=>{
+    const point = pointerToCanvas(event);
+    coverDraggingCorner = nearestCorner(point);
+
+    if(coverDraggingCorner >= 0){
+      canvas.setPointerCapture(event.pointerId);
+      event.preventDefault();
+    }
+  });
+
+  canvas.addEventListener("pointermove", event=>{
+    if(coverDraggingCorner < 0) return;
+
+    const p = pointerToCanvas(event);
+    coverDisplayCorners[coverDraggingCorner] = {
+      x:Math.max(0,Math.min(canvas.width,p.x)),
+      y:Math.max(0,Math.min(canvas.height,p.y))
+    };
+
+    drawCoverOverlay();
+    event.preventDefault();
+  });
+
+  const end = event=>{
+    if(coverDraggingCorner >= 0){
+      coverDraggingCorner = -1;
+      event.preventDefault();
+    }
+  };
+
+  canvas.addEventListener("pointerup", end);
+  canvas.addEventListener("pointercancel", end);
+}
+
+function dist(a,b){
+  return Math.hypot(a.x-b.x,a.y-b.y);
+}
+
+async function validateCoverCrop(){
+  const status = document.getElementById("coverScanStatus");
+
+  if(!coverOriginalImage || coverDisplayCorners.length !== 4){
+    alert("Prenez d'abord une photo de la jaquette.");
     return;
   }
 
-  progress.textContent = "Lecture de la jaquette… la première fois peut prendre quelques secondes.";
+  try{
+    await waitForOpenCV();
+
+    const displayCanvas = document.getElementById("coverScanCanvas");
+    const sx = coverOriginalImage.naturalWidth / displayCanvas.width;
+    const sy = coverOriginalImage.naturalHeight / displayCanvas.height;
+
+    const pts = sortQuadPoints(
+      coverDisplayCorners.map(p=>({x:p.x*sx,y:p.y*sy}))
+    );
+
+    const widthTop = dist(pts[0],pts[1]);
+    const widthBottom = dist(pts[3],pts[2]);
+    const heightLeft = dist(pts[0],pts[3]);
+    const heightRight = dist(pts[1],pts[2]);
+
+    let outW = Math.round(Math.max(widthTop,widthBottom));
+    let outH = Math.round(Math.max(heightLeft,heightRight));
+
+    const maxDim = 1400;
+    const shrink = Math.min(1, maxDim / Math.max(outW,outH));
+    outW = Math.max(300,Math.round(outW*shrink));
+    outH = Math.max(420,Math.round(outH*shrink));
+
+    const sourceCanvas = document.createElement("canvas");
+    sourceCanvas.width = coverOriginalImage.naturalWidth;
+    sourceCanvas.height = coverOriginalImage.naturalHeight;
+    sourceCanvas.getContext("2d").drawImage(coverOriginalImage,0,0);
+
+    const src = cv.imread(sourceCanvas);
+    const dst = new cv.Mat();
+
+    const srcTri = cv.matFromArray(4,1,cv.CV_32FC2,[
+      pts[0].x,pts[0].y,
+      pts[1].x,pts[1].y,
+      pts[2].x,pts[2].y,
+      pts[3].x,pts[3].y
+    ]);
+
+    const dstTri = cv.matFromArray(4,1,cv.CV_32FC2,[
+      0,0,
+      outW-1,0,
+      outW-1,outH-1,
+      0,outH-1
+    ]);
+
+    const M = cv.getPerspectiveTransform(srcTri,dstTri);
+    cv.warpPerspective(
+      src,dst,M,new cv.Size(outW,outH),
+      cv.INTER_LINEAR,cv.BORDER_CONSTANT,new cv.Scalar()
+    );
+
+    const outputCanvas = document.createElement("canvas");
+    outputCanvas.width = outW;
+    outputCanvas.height = outH;
+    cv.imshow(outputCanvas,dst);
+
+    src.delete();
+    dst.delete();
+    srcTri.delete();
+    dstTri.delete();
+    M.delete();
+
+    coverCroppedBlob = await new Promise(resolve=>
+      outputCanvas.toBlob(resolve,"image/jpeg",0.86)
+    );
+
+    if(!coverCroppedBlob) throw new Error("Blob vide");
+
+    if(coverCroppedUrl) URL.revokeObjectURL(coverCroppedUrl);
+    coverCroppedUrl = URL.createObjectURL(coverCroppedBlob);
+
+    document.getElementById("coverFinalImage").src = coverCroppedUrl;
+    document.getElementById("coverFinal").style.display = "block";
+
+    status.textContent = "✓ Jaquette redressée et recadrée.";
+  }catch(error){
+    console.error("Recadrage:",error);
+    status.textContent =
+      "Le recadrage automatique a échoué. Ajustez les coins et réessayez.";
+  }
+}
+
+function startVoiceTitle(){
+  const titleInput = document.getElementById("titleInput");
+  const status = document.getElementById("voiceStatus");
+  const button = document.getElementById("voiceButton");
+
+  const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+  if(!Recognition){
+    titleInput.focus();
+    status.textContent =
+      "Touchez le micro du clavier de l'iPhone pour dicter le titre.";
+    return;
+  }
 
   try{
-    const worker = await Tesseract.createWorker("fra+eng", 1, {
-      logger: m => {
-        if(m.status === "recognizing text" && typeof m.progress === "number"){
-          progress.textContent = "Lecture de la jaquette… " + Math.round(m.progress * 100) + " %";
-        }else if(m.status){
-          progress.textContent = "Analyse de la photo…";
-        }
+    if(voiceRecognition){
+      try{ voiceRecognition.abort(); }catch(e){}
+    }
+
+    voiceRecognition = new Recognition();
+    voiceRecognition.lang = "fr-FR";
+    voiceRecognition.interimResults = false;
+    voiceRecognition.maxAlternatives = 1;
+
+    button.disabled = true;
+    button.textContent = "●";
+    status.textContent = "Je vous écoute… dites le titre du DVD.";
+
+    voiceRecognition.onresult = event=>{
+      const text = event.results?.[0]?.[0]?.transcript || "";
+      if(text){
+        titleInput.value = text.trim();
+        status.textContent = `✓ « ${text.trim()} »`;
       }
-    });
+    };
 
-    const result = await worker.recognize(file);
-    await worker.terminate();
+    voiceRecognition.onerror = ()=>{
+      titleInput.focus();
+      status.textContent =
+        "La dictée web n'a pas répondu. Utilisez le micro du clavier de l'iPhone.";
+    };
 
-    const text = result && result.data ? (result.data.text || "") : "";
-    const likelyTitles = extractLikelyTitles(text);
-
-    if(!likelyTitles.length){
-      progress.textContent = "Je n'ai pas réussi à lire un titre clairement. Vous pouvez reprendre la photo ou saisir le titre.";
-      document.getElementById("titleInput").focus();
-      return;
-    }
-
-    progress.textContent = "Touchez le titre qui correspond au DVD :";
-    renderOcrTitleButtons(likelyTitles);
-
-    // Automatically search the strongest OCR line.
-    await searchMovieTitle(likelyTitles[0]);
-  }catch(error){
-    console.error("OCR:", error);
-    progress.textContent =
-      "La lecture de la photo a échoué. Reprenez une photo bien de face, sans reflet, ou saisissez le titre.";
-  }
-}
-
-function renderOcrTitleButtons(lines){
-  const box = document.getElementById("ocrLines");
-  box.innerHTML = "";
-
-  lines.forEach(line=>{
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "ocr-line";
-    button.textContent = line;
-    button.onclick = ()=>searchMovieTitle(line);
-    box.appendChild(button);
-  });
-}
-
-async function searchMovieTitle(title){
-  title = cleanOcrLine(title);
-  if(!title) return;
-
-  const progress = document.getElementById("ocrProgress");
-  const resultsBox = document.getElementById("photoResults");
-  resultsBox.innerHTML = "";
-  progress.textContent = `Recherche de « ${title} »…`;
-
-  try{
-    // French Wikipedia's MediaWiki API is public and supports CORS.
-    // "film" is added to bias results toward movies.
-    const params = new URLSearchParams({
-      action: "query",
-      format: "json",
-      origin: "*",
-      generator: "search",
-      gsrsearch: `${title} film`,
-      gsrnamespace: "0",
-      gsrlimit: "8",
-      prop: "pageimages|description|extracts",
-      piprop: "thumbnail",
-      pithumbsize: "240",
-      exintro: "1",
-      explaintext: "1",
-      exsentences: "2",
-      redirects: "1"
-    });
-
-    const response = await fetch("https://fr.wikipedia.org/w/api.php?" + params.toString());
-    if(!response.ok) throw new Error("HTTP " + response.status);
-
-    const data = await response.json();
-    const pages = data && data.query && data.query.pages
-      ? Object.values(data.query.pages)
-      : [];
-
-    const moviePages = pages.filter(page=>{
-      const haystack = [
-        page.title || "",
-        page.description || "",
-        page.extract || ""
-      ].join(" ").toLowerCase();
-
-      return /(film|long métrage|long-métrage|cinéma|movie)/i.test(haystack);
-    });
-
-    currentCandidates = (moviePages.length ? moviePages : pages)
-      .slice(0, 6)
-      .map(page=>({
-        title: String(page.title || "").replace(/\s*\(film.*?\)\s*$/i, "").trim(),
-        displayTitle: page.title || "",
-        creator: "",
-        year: ((page.extract || "").match(/\b(19|20)\d{2}\b/) || [""])[0],
-        publisher: "",
-        coverUrl: page.thumbnail && page.thumbnail.source ? page.thumbnail.source : "",
-        source: "Wikipédia",
-        description: page.description || page.extract || "",
-        confirmed: false
-      }))
-      .filter(c=>c.title);
-
-    renderPhotoResults();
-
-    if(currentCandidates.length){
-      progress.textContent =
-        `${currentCandidates.length} film${currentCandidates.length > 1 ? "s" : ""} proposé${currentCandidates.length > 1 ? "s" : ""}. Choisissez le bon.`;
-    }else{
-      progress.textContent =
-        "Aucun film convaincant trouvé. Touchez un autre texte détecté ou saisissez le titre.";
-    }
-  }catch(error){
-    console.error("Recherche film:", error);
-    progress.textContent =
-      "La recherche de film n'a pas répondu. Touchez un autre texte détecté ou saisissez le titre.";
-  }
-}
-
-function renderPhotoResults(){
-  const box = document.getElementById("photoResults");
-  box.innerHTML = "";
-
-  currentCandidates.forEach((candidate, index)=>{
-    const card = document.createElement("div");
-    card.className = "photo-result";
-
-    card.innerHTML = `
-      <div class="photo-result-main">
-        ${candidate.coverUrl
-          ? `<img src="${escapeHtml(candidate.coverUrl)}" alt="" onerror="this.style.display='none'">`
-          : `<div style="width:62px;height:88px;border-radius:8px;background:#ececf3;flex:0 0 auto"></div>`
-        }
-        <div style="min-width:0;flex:1">
-          <div class="lookup-source">${escapeHtml(candidate.source)}</div>
-          <div class="photo-result-title">${escapeHtml(candidate.displayTitle || candidate.title)}</div>
-          ${candidate.year ? `<div class="meta">${escapeHtml(candidate.year)}</div>` : ""}
-          ${candidate.description ? `<div class="meta" style="margin-top:4px">${escapeHtml(candidate.description.slice(0,180))}</div>` : ""}
-        </div>
-      </div>
-      <button class="primary" style="width:100%;margin-top:9px" onclick="choosePhotoCandidate(${index})">
-        ✓ C'est ce DVD
-      </button>
-    `;
-
-    box.appendChild(card);
-  });
-}
-
-function choosePhotoCandidate(index){
-  const candidate = currentCandidates[index];
-  if(!candidate) return;
-
-  currentLookup = {
-    ...candidate,
-    confirmed: true
-  };
-
-  document.getElementById("titleInput").value = candidate.title;
-  document.getElementById("lookupStatus").textContent =
-    `✓ « ${candidate.title} » retenu. L'EAN restera associé à cette fiche.`;
-
-  document.querySelectorAll("#photoResults button").forEach((button, i)=>{
-    if(i === index){
-      button.disabled = true;
-      button.textContent = "✓ Sélectionné";
-    }else{
+    voiceRecognition.onend = ()=>{
       button.disabled = false;
-      button.textContent = "✓ C'est ce DVD";
-    }
-  });
+      button.textContent = "🎤";
+      voiceRecognition = null;
+    };
 
-  document.getElementById("titleInput").focus();
+    voiceRecognition.start();
+  }catch(error){
+    button.disabled = false;
+    button.textContent = "🎤";
+    titleInput.focus();
+    status.textContent =
+      "Utilisez le micro du clavier de l'iPhone pour dicter le titre.";
+  }
 }
 
-// The barcode is now a reference only. It no longer decides the film title.
+// L'EAN est une référence seulement.
 async function lookupDVDByEAN(ean){
-  ean = String(ean || "").replace(/\D/g, "");
+  ean = String(ean || "").replace(/\D/g,"");
   if(!ean) return;
 
   document.getElementById("lookupStatus").textContent =
-    `EAN ${ean} enregistré comme référence. Photographiez la jaquette pour identifier le film.`;
+    `✓ EAN ${ean} scanné.`;
+}
+
+if(document.readyState === "loading"){
+  document.addEventListener("DOMContentLoaded", setupCoverCanvasEvents);
+}else{
+  setupCoverCanvasEvents();
 }
 
 let scannerControls = null;
@@ -1913,7 +2221,6 @@ async function startCamera(){
 
         if(navigator.vibrate) navigator.vibrate(100);
         lookupDVDByEAN(value);
-        setTimeout(()=>document.getElementById("coverPhotoInput").click(), 250);
       }
     );
 
