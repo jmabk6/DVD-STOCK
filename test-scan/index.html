@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Test scan DVD</title>
+<link rel="manifest" href="manifest.json">
+<style>
+:root{--petrol:#123331;--deep:#0B211F;--paper:#DFE3D9;--card:#F5F4EE;
+  --stamp:#A8392C;--valid:#2F6F4E;--amber:#B4761B;--line:#B7BEB1;--mute:#6E7A72}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{height:100%}
+body{background:var(--paper);color:var(--petrol);
+  font-family:system-ui,-apple-system,sans-serif;
+  display:flex;flex-direction:column;height:100dvh;overflow:hidden}
+
+header{background:var(--petrol);color:var(--card);padding:10px 14px;flex-shrink:0;
+  display:flex;align-items:baseline;gap:10px}
+header h1{font-size:16px;font-weight:600}
+header .n{margin-left:auto;font-family:ui-monospace,monospace;font-size:15px;color:#9FB5AF}
+
+#viseur{position:relative;background:#0A1817;flex-shrink:0;height:44vh;overflow:hidden}
+#video{width:100%;height:100%;object-fit:cover}
+#cadre{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  width:74%;height:34%;border:2px solid rgba(223,227,217,.55);border-radius:3px;
+  pointer-events:none}
+#cadre.lock{border-color:var(--valid);border-width:4px}
+#etat{position:absolute;left:0;right:0;bottom:10px;text-align:center;
+  color:#CFE0DC;font-size:13px;text-shadow:0 1px 3px #000}
+
+#diag{background:var(--card);border-bottom:1px solid var(--line);
+  padding:9px 14px;font-size:13px;line-height:1.65;flex-shrink:0}
+#diag b{font-weight:600}
+.ok{color:var(--valid);font-weight:600}
+.ko{color:var(--stamp);font-weight:600}
+.wait{color:var(--amber);font-weight:600}
+
+#journal{flex:1;overflow-y:auto;padding:10px 12px}
+.lu{background:var(--card);border:1px solid var(--line);padding:10px 12px;
+  margin-bottom:7px;display:flex;align-items:baseline;gap:10px}
+.lu code{font-family:ui-monospace,monospace;font-size:17px;font-weight:600;flex:1}
+.lu .ms{font-family:ui-monospace,monospace;font-size:14px;color:var(--mute)}
+.lu.dup{border-color:var(--amber);background:#F7F0E2}
+.lu.dup .ms{color:var(--amber);font-weight:600}
+#vide{color:var(--mute);font-size:14px;text-align:center;padding:26px 20px}
+
+footer{flex-shrink:0;display:flex;gap:1px;background:var(--line);
+  border-top:1px solid var(--line)}
+footer button{flex:1;background:var(--card);border:0;font-family:inherit;
+  font-size:15px;padding:15px 6px calc(15px + env(safe-area-inset-bottom));cursor:pointer;color:var(--petrol)}
+footer button:active{background:var(--paper)}
+footer button.on{background:var(--petrol);color:var(--card);font-weight:600}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Test scan — étape 0</h1>
+  <span class="n"><span id="cpt">0</span> lus</span>
+</header>
+
+<div id="viseur">
+  <video id="video" playsinline muted autoplay></video>
+  <div id="cadre"></div>
+  <div id="etat">Initialisation…</div>
+</div>
+
+<div id="diag">
+  <div><b>Lancée depuis l'icône :</b> <span id="d-pwa">…</span></div>
+  <div><b>Décodeur WASM :</b> <span id="d-wasm">…</span></div>
+  <div><b>Caméra :</b> <span id="d-cam">…</span></div>
+  <div><b>Cadence de décodage :</b> <span id="d-fps">…</span></div>
+</div>
+
+<div id="journal"><div id="vide">Présentez le code-barres d'un DVD.<br>Chaque lecture s'affiche ici avec son temps d'accroche.</div></div>
+
+<footer>
+  <button id="b-torche" onclick="torche()">Lampe</button>
+  <button onclick="vider()">Vider</button>
+</footer>
+
+<script type="module">
+import { readBarcodes, prepareZXingModule } from
+  "https://cdn.jsdelivr.net/npm/zxing-wasm@3.1.3/dist/es/reader/index.js";
+
+const $ = id => document.getElementById(id);
+const LARGEUR = 640;          // largeur d'analyse (réduite = plus rapide)
+const REARM_VIDE = 8;         // images sans code avant réarmement
+const OPTS = { formats: ["EAN-13"], tryHarder: true, maxNumberOfSymbols: 1 };
+
+let module_ok = false, verrou = false, videCount = 0;
+let compteur = 0, tArme = performance.now(), vus = new Set();
+let piste = null, torcheOn = false;
+let fps = 0, fpsN = 0, fpsT = performance.now();
+
+// --- diagnostic PWA ---
+const standalone = window.matchMedia("(display-mode: standalone)").matches
+  || window.navigator.standalone === true;
+$("d-pwa").innerHTML = standalone
+  ? '<span class="ok">oui</span>'
+  : '<span class="wait">non — ouvrez depuis l\'écran d\'accueil</span>';
+
+// --- WASM épinglé ---
+prepareZXingModule({
+  overrides: {
+    locateFile: (path, prefix) => path.endsWith(".wasm")
+      ? `https://cdn.jsdelivr.net/npm/zxing-wasm@3.1.3/dist/reader/${path}`
+      : prefix + path
+  },
+  fireImmediately: true
+}).then(() => {
+  module_ok = true;
+  $("d-wasm").innerHTML = '<span class="ok">chargé (3.1.3)</span>';
+}).catch(e => {
+  $("d-wasm").innerHTML = '<span class="ko">échec — ' + e.message + '</span>';
+});
+
+// --- caméra ---
+const canvas = document.createElement("canvas");
+const ctx = canvas.getContext("2d", { willReadFrequently: true });
+
+async function demarrer(){
+  try {
+    const flux = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: "environment" },
+               width: { ideal: 1280 }, height: { ideal: 720 } },
+      audio: false
+    });
+    $("video").srcObject = flux;
+    piste = flux.getVideoTracks()[0];
+    const r = piste.getSettings();
+    $("d-cam").innerHTML = `<span class="ok">${r.width}×${r.height}</span>`;
+    $("b-torche").style.display =
+      (piste.getCapabilities && piste.getCapabilities().torch) ? "" : "none";
+    $("etat").textContent = "Présentez le code-barres";
+    requestAnimationFrame(boucle);
+  } catch(e){
+    $("d-cam").innerHTML = '<span class="ko">' + e.name + ' — ' + e.message + '</span>';
+    $("etat").textContent = "Caméra indisponible";
+  }
+}
+
+async function boucle(){
+  const v = $("video");
+  if (module_ok && v.readyState >= 2 && !document.hidden){
+    const ech = LARGEUR / v.videoWidth;
+    canvas.width = LARGEUR;
+    canvas.height = Math.round(v.videoHeight * ech);
+    ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
+    try {
+      const res = await readBarcodes(
+        ctx.getImageData(0, 0, canvas.width, canvas.height), OPTS);
+      majFps();
+      if (res.length && res[0].text) traiter(res[0].text);
+      else { videCount++; if (verrou && videCount >= REARM_VIDE) rearmer(); }
+    } catch(e){ /* image ignorée */ }
+  }
+  requestAnimationFrame(boucle);
+}
+
+function majFps(){
+  fpsN++;
+  const dt = performance.now() - fpsT;
+  if (dt >= 1000){
+    fps = Math.round(fpsN * 1000 / dt); fpsN = 0; fpsT = performance.now();
+    $("d-fps").innerHTML = `<span class="${fps >= 8 ? 'ok' : 'wait'}">${fps} images/s</span>`;
+  }
+}
+
+function traiter(ean){
+  videCount = 0;
+  if (verrou) return;
+  if (!cleValide(ean)) return;
+  verrou = true;
+  $("cadre").classList.add("lock");
+  $("etat").textContent = "Code lu — retirez le boîtier";
+  const ms = Math.round(performance.now() - tArme);
+  const dup = vus.has(ean);
+  vus.add(ean);
+  compteur++; $("cpt").textContent = compteur;
+  $("vide")?.remove();
+  $("journal").insertAdjacentHTML("afterbegin",
+    `<div class="lu${dup ? ' dup' : ''}"><code>${ean}</code>
+     <span class="ms">${dup ? 'déjà lu · ' : ''}${ms} ms</span></div>`);
+  bip(dup);
+}
+
+function rearmer(){
+  verrou = false; videCount = 0; tArme = performance.now();
+  $("cadre").classList.remove("lock");
+  $("etat").textContent = "Présentez le code-barres";
+}
+
+function cleValide(ean){
+  if (!/^\d{13}$/.test(ean)) return false;
+  let s = 0;
+  for (let i = 0; i < 12; i++) s += (+ean[i]) * (i % 2 ? 3 : 1);
+  return (10 - s % 10) % 10 === +ean[12];
+}
+
+let audio;
+function bip(dup){
+  try{
+    audio ||= new (window.AudioContext || window.webkitAudioContext)();
+    const o = audio.createOscillator(), g = audio.createGain();
+    o.frequency.value = dup ? 420 : 1180;
+    g.gain.value = .18;
+    o.connect(g); g.connect(audio.destination);
+    o.start(); o.stop(audio.currentTime + (dup ? .22 : .09));
+  }catch(e){}
+  if (navigator.vibrate) navigator.vibrate(dup ? [60,50,60] : 45);
+}
+
+window.torche = async () => {
+  if (!piste) return;
+  torcheOn = !torcheOn;
+  try{
+    await piste.applyConstraints({ advanced: [{ torch: torcheOn }] });
+    $("b-torche").classList.toggle("on", torcheOn);
+  }catch(e){}
+};
+
+window.vider = () => {
+  vus.clear(); compteur = 0; $("cpt").textContent = "0";
+  $("journal").innerHTML = '<div id="vide">Journal vidé.</div>';
+};
+
+demarrer();
+</script>
+</body>
+</html>
