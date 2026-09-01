@@ -129,6 +129,13 @@ body{
 .valeur.mono{font-family:var(--mono);font-weight:500;font-size:21px;letter-spacing:.02em}
 .sous{font-size:14px;color:var(--mute);margin-top:3px}
 
+/* vignette de jaquette */
+.vignette{
+  width:44px;height:62px;flex-shrink:0;display:block;
+  object-fit:cover;background:#16302D;border:1px solid #0B211F;
+}
+.avec-vignette{display:flex;align-items:center;gap:11px}
+
 .ligne.faite .puce{background:var(--valid);border-color:var(--valid);color:var(--card)}
 .ligne.active{background:#EDEDE4}
 .ligne.active .puce{border-color:var(--petrol);border-style:dashed}

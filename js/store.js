@@ -11,7 +11,10 @@
 // Schéma : §3 de la SPEC-001, sans le champ `provenance` (retiré).
 
 const BASE = "dvd-stock";
-const VERSION_SCHEMA = 1;
+const VERSION_SCHEMA = 2;   // v2 : ajout du magasin `photos`
+
+/** I-11 — largeur maximale d'une jaquette écrite en base. */
+export const LARGEUR_PHOTO = 400;
 
 const STATUTS = ["EN_STOCK", "A_VERIFIER", "VENDU", "REBUT"];
 const ETATS_BOITIER = ["BON", "MOYEN", "ABIME"];
@@ -69,6 +72,26 @@ function validerDisque(d){
   montantValide("prixGibert", d.prixGibert, true);
   montantValide("prixEbay", d.prixEbay, false);
   return d;
+}
+
+function validerPhoto(p){
+  if (typeof p?.cle !== "string" || !p.cle)
+    throw new ErreurInvariant("I-12", "photo sans clé");
+  if (!Number.isInteger(p.largeur) || p.largeur < 1)
+    throw new ErreurInvariant("I-11", `largeur invalide : ${JSON.stringify(p.largeur)}`);
+  if (!Number.isInteger(p.hauteur) || p.hauteur < 1)
+    throw new ErreurInvariant("I-11", `hauteur invalide : ${JSON.stringify(p.hauteur)}`);
+  // I-11 — le redimensionnement se fait AVANT l'écriture, jamais après.
+  // Le store refuse ce qui arrive en pleine résolution : c'est ici que
+  // l'invariant devient impossible à contourner.
+  if (p.largeur > LARGEUR_PHOTO)
+    throw new ErreurInvariant("I-11",
+      `photo de ${p.largeur} px de large : elle doit être réduite à ${LARGEUR_PHOTO} px avant écriture`);
+  if (!Number.isInteger(p.octets) || p.octets < 1)
+    throw new ErreurInvariant("I-6", `octets invalide : ${JSON.stringify(p.octets)}`);
+  if (!Number.isInteger(p.dateSaisie))
+    throw new ErreurInvariant("I-6", "dateSaisie doit être un entier");
+  return p;
 }
 
 function validerCaisse(c){
@@ -138,13 +161,20 @@ function promesse(requete){
 function ouvrirBase(){
   basePromesse ||= new Promise((resoudre, rejeter) => {
     const requete = indexedDB.open(BASE, VERSION_SCHEMA);
+    // Montée de version additive : une base déjà remplie ne doit rien perdre.
     requete.onupgradeneeded = () => {
       const base = requete.result;
-      const disques = base.createObjectStore("disques", { keyPath: "id" });
-      disques.createIndex("ean", "ean");   // les fiches sans EAN ne sont pas indexées
-      disques.createIndex("caisse", "caisse");
-      base.createObjectStore("caisses", { keyPath: "code" });
-      base.createObjectStore("meta", { keyPath: "cle" });
+      if (!base.objectStoreNames.contains("disques")){
+        const disques = base.createObjectStore("disques", { keyPath: "id" });
+        disques.createIndex("ean", "ean");   // les fiches sans EAN ne sont pas indexées
+        disques.createIndex("caisse", "caisse");
+      }
+      if (!base.objectStoreNames.contains("caisses"))
+        base.createObjectStore("caisses", { keyPath: "code" });
+      if (!base.objectStoreNames.contains("meta"))
+        base.createObjectStore("meta", { keyPath: "cle" });
+      if (!base.objectStoreNames.contains("photos"))
+        base.createObjectStore("photos", { keyPath: "cle" });
     };
     requete.onsuccess = () => resoudre(requete.result);
     requete.onerror = () => rejeter(requete.error);
@@ -173,7 +203,8 @@ async function lireMeta(magasin, cle, defaut){
 }
 
 // ---------------------------------------------------------------------------
-// API publique — dix fonctions, et rien d'autre.
+// API publique — douze fonctions, et la constante LARGEUR_PHOTO dont photo.js
+// a besoin pour réduire au bon format. Rien d'autre.
 // ---------------------------------------------------------------------------
 
 /**
@@ -386,7 +417,41 @@ export function compterSession(){
   return compteurSession;
 }
 
-/** L'intégralité des données, prête à être écrite dans un fichier JSON. */
+/**
+ * Écrit une jaquette et rend sa clé, à passer en `photoCle` à `ajouterDisque`.
+ * L'image doit déjà être réduite : le store refuse toute largeur supérieure à
+ * LARGEUR_PHOTO (I-11). C'est photo.js qui réduit, jamais le store.
+ */
+export async function enregistrerPhoto({ donnees, largeur, hauteur }){
+  const octets = donnees?.size;
+  const photo = validerPhoto({
+    cle: crypto.randomUUID(),
+    donnees,
+    largeur,
+    hauteur,
+    octets: Number.isInteger(octets) ? octets : NaN,
+    dateSaisie: Date.now(),
+  });
+  return transaction(["photos"], "readwrite", async magasin => {
+    await promesse(magasin("photos").add(photo));
+    return photo.cle;
+  });
+}
+
+/** La jaquette portant cette clé, ou null. */
+export async function lirePhoto(cle){
+  if (typeof cle !== "string" || !cle) return null;
+  return transaction(["photos"], "readonly", async magasin => {
+    const photo = await promesse(magasin("photos").get(cle));
+    return photo === undefined ? null : validerPhoto(photo);
+  });
+}
+
+/**
+ * L'intégralité des données, prête à être écrite dans un fichier JSON.
+ * Les jaquettes en sont exclues : elles sont lourdes et reproductibles, les
+ * fiches sont irremplaçables (SPEC §2). Un export reste un fichier de texte.
+ */
 export async function exporterTout(){
   return transaction(["disques", "caisses", "meta"], "readonly", async magasin => {
     const disques = (await promesse(magasin("disques").getAll())).map(validerDisque);

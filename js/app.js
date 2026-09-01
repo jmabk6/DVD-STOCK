@@ -1,5 +1,5 @@
 // app.js — orchestration et écrans.
-// Commit 4 : l'écran de saisie. Scan, enregistrement, tampon d'emplacement.
+// L'écran de saisie : scan, jaquette, enregistrement, tampon d'emplacement.
 //
 // La mise en page, la hiérarchie et les jetons de couleur viennent de la
 // maquette saisie.html ; son JavaScript ne simulait que des états et n'a pas
@@ -9,8 +9,13 @@
 // Le formatage de l'emplacement (C12-025) vit ici : c'est de la présentation.
 // Le store rend `caisse` et `position` séparés et n'a pas à savoir comment on
 // les affiche.
+//
+// Séquence par disque (SPEC §6.1) : scan EAN → photo jaquette → enregistrement.
+// Un doublon coupe court : le disque rejoint son jumeau, il n'a pas besoin
+// d'une seconde jaquette.
 
 import { creerScanner, chargerDecodeur } from "./scanner.js";
+import { capturer, urlDeLaPhoto } from "./photo.js";
 import * as store from "./store.js";
 
 const $ = id => document.getElementById(id);
@@ -23,8 +28,13 @@ const emplacement = d => `${d.caisse}-${String(d.position).padStart(3, "0")}`;
 let caisse = null;          // caisse courante, ou null
 let occupee = 0;            // fiches déjà rangées dans cette caisse
 let minuterieTampon = null;
-let panneauOuvert = false;
 let torcheDisponible = false;
+let urlVignette = null;     // objet URL de la vignette affichée
+
+// « panneau » : ouverture de caisse. « attente » : prêt à scanner.
+// « jaquette » : un EAN est lu, on attend la photo.
+let mode = "attente";
+let enAttente = null;       // { ean } du disque dont on attend la jaquette
 
 // ---------------------------------------------------------------------------
 // Retours sonores et haptiques — trois signaux distincts.
@@ -102,6 +112,24 @@ function majBandeau(alerteCapacite = false){
   etat.classList.toggle("pleine", alerteCapacite || occupee >= caisse.capacite);
 }
 
+function majBoutons(){
+  const principal = $("btn"), second = $("b-torche");
+  if (mode === "panneau"){
+    principal.textContent = "Ouvrir la caisse";
+    second.textContent = "Annuler";
+    second.hidden = !caisse;          // rien à annuler s'il n'y a pas de caisse
+  } else if (mode === "jaquette"){
+    principal.textContent = "Photographier la jaquette";
+    second.textContent = "Sans photo";
+    second.hidden = false;
+  } else {
+    principal.textContent = "Caisses";
+    second.textContent = "Lampe";
+    second.hidden = !torcheDisponible;
+  }
+  second.classList.remove("active");
+}
+
 function remplirLigne(id, html){
   const ligne = $(id);
   ligne.classList.add("faite");
@@ -109,11 +137,19 @@ function remplirLigne(id, html){
 }
 
 function viderFiche(){
-  for (const [id, libelle] of [["l-ean", "Code-barres"], ["l-emplacement", "Emplacement"]]){
+  if (urlVignette){ URL.revokeObjectURL(urlVignette); urlVignette = null; }
+  for (const [id, libelle] of [["l-ean", "Code-barres"],
+                               ["l-photo", "Jaquette"],
+                               ["l-emplacement", "Emplacement"]]){
     const ligne = $(id);
-    ligne.classList.remove("faite");
+    ligne.classList.remove("faite", "active");
     ligne.querySelector(".corps").innerHTML = `<div class="champ-vide">${libelle}</div>`;
   }
+}
+
+function activerLigne(id){
+  document.querySelectorAll(".ligne").forEach(l => l.classList.remove("active"));
+  if (id) $(id).classList.add("active");
 }
 
 function montrerTampon({ classe, cadre, quoi, ou }){
@@ -140,7 +176,8 @@ function annoncer(texte, alerte = false){
 // ---------------------------------------------------------------------------
 
 async function ouvrirPanneau(){
-  panneauOuvert = true;
+  mode = "panneau";
+  enAttente = null;
   $("panneau").hidden = false;
 
   const fermees = await store.listerCaisses({ ouverte: false });
@@ -154,19 +191,14 @@ async function ouvrirPanneau(){
     b.addEventListener("click", () => reprendre(c.code));
     reprise.appendChild(b);
   }
-
-  $("btn").textContent = "Ouvrir la caisse";
-  $("b-torche").textContent = "Annuler";
-  $("b-torche").classList.remove("active");
-  $("b-torche").hidden = !caisse;   // rien à annuler s'il n'y a pas de caisse
+  majBoutons();
 }
 
 function fermerPanneau(){
-  panneauOuvert = false;
+  mode = "attente";
+  enAttente = null;
   $("panneau").hidden = true;
-  $("btn").textContent = "Caisses";
-  $("b-torche").textContent = "Lampe";
-  $("b-torche").hidden = !torcheDisponible;
+  majBoutons();
 }
 
 async function entrerEnSaisie(){
@@ -199,18 +231,70 @@ async function reprendre(code){
 // Enregistrement
 // ---------------------------------------------------------------------------
 
-async function enregistrer(ean){
+/** Un code vient d'être accepté par le scanner. */
+async function surLecture(ean){
   if (!caisse){
     // Le cas du tout début de session : un boîtier passe devant l'objectif
     // avant qu'une caisse existe. Message clair, jamais d'erreur technique.
     signaler("echec");
     annoncer("Ouvrez une caisse avant de scanner", true);
-    if (!panneauOuvert) await ouvrirPanneau();
+    if (mode !== "panneau") await ouvrirPanneau();
     return;
   }
 
+  // Une jaquette est déjà attendue : on ne perd pas le disque en cours.
+  if (mode === "jaquette"){
+    signaler("echec");
+    annoncer("Photographiez d'abord la jaquette", true);
+    return;
+  }
+
+  // Nouveau disque : la fiche repart vide, sans quoi la jaquette du disque
+  // précédent resterait affichée sous le code-barres du suivant.
+  viderFiche();
+  remplirLigne("l-ean", `<div class="valeur mono">${ean}</div>`);
+
+  // Un doublon n'a pas besoin de jaquette : le disque rejoint son jumeau.
+  // On montre celle du premier exemplaire, qui aide à confirmer que c'est
+  // bien le même film.
+  const connu = await store.chercherParEan(ean);
+  if (connu){
+    await montrerJaquetteConnue(connu);
+    await ranger(ean, null);
+    return;
+  }
+
+  enAttente = { ean };
+  mode = "jaquette";
+  activerLigne("l-photo");
+  majBoutons();
+  annoncer("Montrez la jaquette");
+}
+
+/** Le fragment de vignette, commun à la capture et au doublon. */
+function vignette(url, titre, sous){
+  return `<div class="avec-vignette">
+            <img class="vignette" src="${url}" alt="">
+            <div>
+              <div class="valeur" style="font-size:17px">${titre}</div>
+              <div class="sous">${sous}</div>
+            </div>
+          </div>`;
+}
+
+async function montrerJaquetteConnue(disque){
+  if (!disque.photoCle) return;
+  const photo = await store.lirePhoto(disque.photoCle);
+  if (!photo) return;
+  if (urlVignette) URL.revokeObjectURL(urlVignette);
+  urlVignette = urlDeLaPhoto(photo);
+  remplirLigne("l-photo", vignette(urlVignette, "Jaquette", "du premier exemplaire"));
+}
+
+/** Écrit la fiche, avec ou sans jaquette, et tamponne l'emplacement. */
+async function ranger(ean, photoCle){
   try {
-    const { disque, doublon, capacite } = await store.ajouterDisque({ ean });
+    const { disque, doublon, capacite } = await store.ajouterDisque({ ean, photoCle });
     occupee = capacite.occupee;
     const emp = emplacement(disque);
 
@@ -218,6 +302,7 @@ async function enregistrer(ean){
     remplirLigne("l-emplacement",
       `<div class="valeur mono">${emp}</div>` +
       (doublon ? `<div class="sous">déjà en stock · quantité ${disque.quantite}</div>` : ""));
+    activerLigne(null);
 
     majBandeau(capacite.atteinte);
     signaler(doublon ? "doublon" : "accepte");
@@ -245,7 +330,40 @@ async function enregistrer(ean){
       quoi: "Enregistrement impossible",
       ou: e?.message ?? String(e),
     });
+  } finally {
+    enAttente = null;
+    mode = "attente";
+    majBoutons();
+    annoncer("Présentez le code-barres");
   }
+}
+
+/** Déclenchement simple : une image du flux, réduite, puis la fiche. */
+async function photographier(){
+  if (!enAttente) return;
+  const ean = enAttente.ean;
+  try {
+    const photo = await capturer($("video"));
+    const cle = await store.enregistrerPhoto(photo);
+
+    if (urlVignette) URL.revokeObjectURL(urlVignette);
+    urlVignette = urlDeLaPhoto(photo);
+    remplirLigne("l-photo", vignette(urlVignette, "Jaquette prise",
+      `${photo.largeur} px · ${Math.round(photo.octets / 1024)} Ko`));
+
+    await ranger(ean, cle);
+  } catch (e){
+    // La capture a échoué : on n'abandonne pas la fiche pour autant.
+    signaler("echec");
+    remplirLigne("l-photo", `<div class="sous">jaquette non prise — ${e.message}</div>`);
+    await ranger(ean, null);
+  }
+}
+
+async function rangerSansPhoto(){
+  if (!enAttente) return;
+  remplirLigne("l-photo", `<div class="sous">sans jaquette</div>`);
+  await ranger(enAttente.ean, null);
 }
 
 // ---------------------------------------------------------------------------
@@ -256,8 +374,8 @@ const scanner = creerScanner({
   video: $("video"),
 
   surEtat(texte, verrouille){
-    // Ni le panneau de caisse ni une alerte en cours ne doivent être écrasés.
-    if (!panneauOuvert && !$("hint").classList.contains("alerte")){
+    // Ni le panneau, ni l'attente de jaquette, ni une alerte ne sont écrasés.
+    if (mode === "attente" && !$("hint").classList.contains("alerte")){
       $("hint").textContent = texte;
     }
     $("viseur").classList.toggle("verrouille", verrouille);
@@ -265,12 +383,12 @@ const scanner = creerScanner({
 
   surCamera({ torche }){
     torcheDisponible = torche;
-    if (!panneauOuvert) $("b-torche").hidden = !torche;
+    majBoutons();
   },
 
   surCode(ean){
     $("hint").classList.remove("alerte");
-    enregistrer(ean);
+    surLecture(ean);
   },
 
   surEchec(){
@@ -285,12 +403,14 @@ const scanner = creerScanner({
 // ---------------------------------------------------------------------------
 
 $("btn").addEventListener("click", () => {
-  if (panneauOuvert) creerCaisse();
+  if (mode === "panneau") creerCaisse();
+  else if (mode === "jaquette") photographier();
   else ouvrirPanneau();
 });
 
 $("b-torche").addEventListener("click", async () => {
-  if (panneauOuvert){ fermerPanneau(); return; }
+  if (mode === "panneau"){ fermerPanneau(); annoncer("Présentez le code-barres"); return; }
+  if (mode === "jaquette"){ rangerSansPhoto(); return; }
   $("b-torche").classList.toggle("active", await scanner.basculerTorche());
 });
 

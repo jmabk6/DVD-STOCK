@@ -107,6 +107,10 @@ class FauxTransaction {
 
 class FauxBase {
   constructor(){ this.magasins = new Map(); }
+  get objectStoreNames(){
+    const noms = [...this.magasins.keys()];
+    return { contains: n => noms.includes(n), length: noms.length, item: i => noms[i] ?? null };
+  }
   createObjectStore(nom, { keyPath }){
     const m = { cheminCle: keyPath, donnees: new Map(), indexes: new Map() };
     this.magasins.set(nom, m);
@@ -357,9 +361,9 @@ async function testI12(){
   // Aucune fonction de suppression n'est exposée.
   const api = Object.keys(store).filter(n => typeof store[n] === "function").sort();
   egal(api, ["ajouterDisque", "caisseCourante", "chercherParEan", "compterSession",
-             "exporterTout", "fermerCaisse", "listerCaisses", "listerDisques",
-             "ouvrirCaisse", "rouvrirCaisse"],
-    "I-12 : l'API est exactement les dix fonctions prévues");
+             "enregistrerPhoto", "exporterTout", "fermerCaisse", "lirePhoto",
+             "listerCaisses", "listerDisques", "ouvrirCaisse", "rouvrirCaisse"],
+    "I-12 : l'API est exactement les douze fonctions prévues");
   verifier(!api.some(n => /suppr|efface|retire|delete|remove/i.test(n)),
     "I-12 : aucune fonction de suppression exposée");
 
@@ -390,6 +394,55 @@ async function testI12(){
     "I-12 : la base contient autant d'enregistrements que de fiches créées");
   egal(tout.caisses.length, 2, "I-12 : une caisse fermée reste dans les données");
   egal(tout.caisses.map(c => c.ouverte), [false, true], "I-12 : la fermeture est un état, pas un retrait");
+}
+
+// ===========================================================================
+// I-11 — une photo est réduite AVANT écriture, jamais après
+// ===========================================================================
+async function testI11(){
+  const { store, base } = await storeNeuf();
+  await store.ouvrirCaisse(10);
+
+  const image = (octets) => new Blob([new Uint8Array(octets)], { type: "image/jpeg" });
+
+  // Une jaquette au format attendu passe et se relit.
+  const cle = await store.enregistrerPhoto({ donnees: image(38_000), largeur: 400, hauteur: 225 });
+  verifier(typeof cle === "string" && cle.length > 0, "I-11 : enregistrerPhoto rend une clé");
+  const relue = await store.lirePhoto(cle);
+  egal([relue.largeur, relue.hauteur, relue.octets], [400, 225, 38_000],
+    "I-11 : la jaquette se relit avec ses dimensions et son poids");
+  verifier(relue.donnees instanceof Blob, "I-11 : les données relues sont un blob");
+
+  // Une pleine résolution est refusée à l'écriture. C'est là que l'invariant
+  // devient impossible à contourner : rien en aval ne peut en écrire une.
+  await leve("I-11", () => store.enregistrerPhoto({ donnees: image(900_000), largeur: 1280, hauteur: 720 }),
+    "I-11 : une image de 1280 px est refusée");
+  await leve("I-11", () => store.enregistrerPhoto({ donnees: image(50_000), largeur: 401, hauteur: 225 }),
+    "I-11 : un seul pixel de trop suffit à refuser");
+  await leve("I-11", () => store.enregistrerPhoto({ donnees: image(1000), largeur: 400.5, hauteur: 225 }),
+    "I-11 : une largeur non entière est refusée");
+
+  // Une image plus étroite que la cible est acceptée : on ne grossit jamais.
+  const etroite = await store.enregistrerPhoto({ donnees: image(9_000), largeur: 320, hauteur: 180 });
+  egal((await store.lirePhoto(etroite)).largeur, 320, "I-11 : une image plus étroite passe telle quelle");
+
+  // La clé se raccroche à une fiche.
+  const { disque } = await store.ajouterDisque({ ean: EAN_A, photoCle: cle });
+  egal(disque.photoCle, cle, "I-11 : photoCle est portée par la fiche");
+  egal((await store.chercherParEan(EAN_A)).photoCle, cle, "I-11 : photoCle survit à la relecture");
+
+  // Une corruption arrivée par une autre porte est vue à la lecture.
+  const brute = lireBrut(base, "photos", cle);
+  planter(base, "photos", { ...brute, largeur: 1600 });
+  await leve("I-11", () => store.lirePhoto(cle), "I-11 : une pleine résolution plantée est vue à la lecture");
+
+  egal(await store.lirePhoto("inconnue"), null, "I-11 : une clé inconnue rend null");
+  egal(await store.lirePhoto(null), null, "I-11 : une clé nulle rend null");
+
+  // Les jaquettes ne partent pas dans l'export : lourdes et reproductibles.
+  const tout = await store.exporterTout();
+  verifier(!("photos" in tout), "I-11 : l'export ne contient pas les jaquettes");
+  verifier(JSON.stringify(tout).length < 20_000, "I-11 : l'export reste un fichier de texte");
 }
 
 // ===========================================================================
@@ -522,6 +575,7 @@ const suites = [
   ["I-2  progression des positions", testI2],
   ["I-3  doublons", testI3],
   ["I-6  centimes entiers", testI6],
+  ["I-11 jaquette réduite avant écriture", testI11],
   ["I-12 aucune suppression", testI12],
   ["      caisses et emplacements", testCaisses],
   ["API  contrôles complémentaires", testApi],
