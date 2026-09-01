@@ -15,6 +15,7 @@ export const VERSION_DECODEUR = "3.1.3";
 export const REGLAGES = {
   largeurAnalyse: 640,      // px ; réduire accélère le décodage
   delaiRearmementMs: 400,   // I-8 : absence de code avant réarmement
+  delaiEchecMs: 1200,       // intervalle minimal entre deux signalements d'échec
 };
 
 const OPTIONS_LECTURE = {
@@ -50,16 +51,18 @@ export function chargerDecodeur(){
  * Crée un scanner attaché à un élément <video>.
  * Rappels, tous facultatifs :
  *   surCode(ean, msDepuisArmement) — lecture acceptée, verrou posé
+ *   surEchec(code)                 — code lu mais clé de contrôle fausse
  *   surEtat(texte, verrouille)     — libellé d'état lisible
  *   surCamera({largeur, hauteur, torche}) — caméra ouverte
  *   surCadence(imagesParSeconde)   — une fois par seconde
  */
-export function creerScanner({ video, surCode, surEtat, surCamera, surCadence } = {}){
+export function creerScanner({ video, surCode, surEchec, surEtat, surCamera, surCadence } = {}){
   const canvas = document.createElement("canvas");
   const ctx = canvas.getContext("2d", { willReadFrequently: true });
 
   let piste = null, actif = false, decodeurPret = false;
   let verrouille = false, dernierCodeVu = 0, arme = performance.now();
+  let dernierEchec = 0;
   let torcheAllumee = false;
   let images = 0, debutMesure = performance.now();
 
@@ -121,7 +124,19 @@ export function creerScanner({ video, surCode, surEtat, surCamera, surCadence } 
   function traiter(ean){
     dernierCodeVu = performance.now();
     if (verrouille) return;
-    if (!cleEan13Valide(ean)) return;   // clé fausse : ni acceptée, ni verrouillée
+
+    if (!cleEan13Valide(ean)){
+      // Clé fausse : ni acceptée, ni verrouillée. Mais le décodeur relit le
+      // même mauvais code à chaque image tant que le boîtier est devant
+      // l'objectif : sans intervalle minimal, le retour d'échec crépiterait.
+      const maintenant = performance.now();
+      if (maintenant - dernierEchec >= REGLAGES.delaiEchecMs){
+        dernierEchec = maintenant;
+        surEchec?.(ean);
+      }
+      return;
+    }
+
     verrouille = true;
     etat("Code lu — retirez le boîtier");
     surCode?.(ean, Math.round(performance.now() - arme));

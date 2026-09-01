@@ -114,8 +114,8 @@ function verifierProgression(ancienne, nouvelle){
  */
 function etatCapacite(caisse, occupee){
   return {
-    annoncee: caisse.capacite,   // ce que la caisse annonçait avant cet ajout
-    occupee,
+    annoncee: caisse.capacite,   // la capacité déclarée à l'ouverture, jamais modifiée
+    occupee,                     // ce que la caisse contient réellement
     atteinte: occupee >= caisse.capacite,
   };
 }
@@ -342,12 +342,12 @@ export async function ajouterDisque({ ean = null, photoCle = null } = {}){
     });
 
     const capacite = etatCapacite(caisse, voisins.length + 1);
+    // `capacite` n'est pas touchée : c'est ce que JM a annoncé à l'ouverture,
+    // et l'écart avec `occupee` est précisément ce qu'il faut lui montrer.
+    // La relever ferait dire « 5 / 5 » à une caisse annoncée pour trois.
     const avancee = verifierProgression(caisse, {
       ...caisse,
       prochainePosition: caisse.prochainePosition + 1,
-      // « JM peut continuer, la capacité s'ajuste » : la caisse s'est révélée
-      // plus grande qu'annoncée. La capacité suit le réel, et ne redescend jamais.
-      capacite: Math.max(caisse.capacite, capacite.occupee),
     });
     await promesse(disques.add(disque));
     await promesse(caisses.put(validerCaisse(avancee)));

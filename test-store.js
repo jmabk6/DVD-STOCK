@@ -424,11 +424,13 @@ async function testCaisses(){
     "caisses : la capacité est signalée atteinte à partir du cinquième disque");
   egal(suivi.map(s => s.occupee), [1, 2, 3, 4, 5, 6, 7], "caisses : occupation suivie disque par disque");
 
-  // « JM peut continuer, la capacité s'ajuste » : elle suit le réel.
-  egal(suivi.map(s => s.annoncee), [5, 5, 5, 5, 5, 5, 6],
-    "caisses : la capacité annoncée s'ajuste une fois dépassée");
-  egal((await store.listerCaisses({ ouverte: true }))[0].capacite, 7,
-    "caisses : après sept disques, la caisse annonce sept");
+  // La capacité annoncée ne bouge pas : c'est l'écart avec l'occupation qui
+  // porte l'information. Une caisse annoncée à 5 et remplie à 7 dit « 7 / 5 »,
+  // pas « 7 / 7 ».
+  egal(suivi.map(s => s.annoncee), [5, 5, 5, 5, 5, 5, 5],
+    "caisses : la capacité annoncée n'est jamais réécrite par le store");
+  egal((await store.listerCaisses({ ouverte: true }))[0].capacite, 5,
+    "caisses : après sept disques, la caisse annonce toujours cinq");
 
   // Rien n'a été fermé ni bloqué : le store signale, il ne décide pas (I-5).
   egal((await store.caisseCourante()).code, "C01", "caisses : dépasser la capacité ne ferme pas la caisse");
