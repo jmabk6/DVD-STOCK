@@ -1,12 +1,343 @@
 // store.js — SEULE couche d'accès aux données (I-10).
-// Aucun autre fichier ne touche IndexedDB.
+// Aucun autre fichier ne touche IndexedDB. Aucun autre fichier ne connaît le
+// schéma. Quand Firestore arrivera au lot L2, c'est ce fichier seul qui
+// changera, et l'interface publique ci-dessous ne bougera pas.
 //
-// Commit 2. L'API à exposer, et rien d'autre :
-//   ouvrirCaisse(capacite) -> caisse
-//   caisseCourante() -> caisse | null
-//   fermerCaisse(code)
-//   ajouterDisque({ean, photoCle}) -> {disque, doublon:bool}
-//   chercherParEan(ean) -> disque | null
-//   listerDisques(filtre) -> disque[]
-//   compterSession() -> number
-//   exporterTout() -> objet JSON
+// Toutes les fonctions publiques rendent une promesse : IndexedDB n'offre
+// aucun accès synchrone. Les signatures de la consigne décrivent la forme du
+// retour, pas son immédiateté. `compterSession` fait exception : c'est un
+// compteur en mémoire, il répond directement.
+//
+// Schéma : §3 de la SPEC-001, sans le champ `provenance` (retiré).
+
+const BASE = "dvd-stock";
+const VERSION_SCHEMA = 1;
+
+const STATUTS = ["EN_STOCK", "A_VERIFIER", "VENDU", "REBUT"];
+const ETATS_BOITIER = ["BON", "MOYEN", "ABIME"];
+const FORMAT_CODE_CAISSE = /^C\d{2,}$/;
+const FORMAT_EAN = /^\d{13}$/;
+
+/** Violation d'un invariant. Porte son numéro, pour que les tests soient précis. */
+class ErreurInvariant extends Error {
+  constructor(invariant, message){
+    super(`${invariant} — ${message}`);
+    this.name = "ErreurInvariant";
+    this.invariant = invariant;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Validation — appliquée à l'écriture ET à la lecture.
+//
+// À la lecture aussi, parce qu'un enregistrement peut avoir été écrit par une
+// version antérieure, relu depuis un export, ou — au lot L2 — descendu de
+// Firestore. Un montant flottant qui entre par une de ces portes doit être vu
+// là où on le lit, pas propagé en silence.
+// ---------------------------------------------------------------------------
+
+function montantValide(champ, valeur, refusPossible){
+  if (valeur === null) return;
+  if (refusPossible && valeur === "REFUSE") return;   // I-4 : un refus n'est pas un prix nul
+  if (!Number.isInteger(valeur)){
+    throw new ErreurInvariant("I-6",
+      `${champ} doit être un entier de centimes, "REFUSE" ou null — reçu ${JSON.stringify(valeur)}`);
+  }
+}
+
+function validerDisque(d){
+  if (typeof d?.id !== "string" || !d.id)
+    throw new ErreurInvariant("I-12", "disque sans id");
+  if (d.ean !== null && !FORMAT_EAN.test(d.ean ?? ""))
+    throw new ErreurInvariant("I-3", `ean invalide : ${JSON.stringify(d.ean)}`);
+  if (!FORMAT_CODE_CAISSE.test(d.caisse ?? ""))
+    throw new ErreurInvariant("I-1", `caisse invalide : ${JSON.stringify(d.caisse)}`);
+  if (!Number.isInteger(d.position) || d.position < 1)
+    throw new ErreurInvariant("I-1", `position invalide : ${JSON.stringify(d.position)}`);
+  if (!Number.isInteger(d.quantite) || d.quantite < 1)
+    throw new ErreurInvariant("I-6", `quantite invalide : ${JSON.stringify(d.quantite)}`);
+  if (!STATUTS.includes(d.statut))
+    throw new ErreurInvariant("I-12", `statut inconnu : ${JSON.stringify(d.statut)}`);
+  if (d.etatBoitier !== null && !ETATS_BOITIER.includes(d.etatBoitier))
+    throw new ErreurInvariant("I-12", `etatBoitier inconnu : ${JSON.stringify(d.etatBoitier)}`);
+  if (!Array.isArray(d.genres))
+    throw new ErreurInvariant("I-12", "genres doit être un tableau");
+  if (!Number.isInteger(d.dateSaisie))
+    throw new ErreurInvariant("I-6", "dateSaisie doit être un entier");
+  if (d.dateVente !== null && !Number.isInteger(d.dateVente))
+    throw new ErreurInvariant("I-6", "dateVente doit être un entier ou null");
+  montantValide("prixGibert", d.prixGibert, true);
+  montantValide("prixEbay", d.prixEbay, false);
+  return d;
+}
+
+function validerCaisse(c){
+  if (!FORMAT_CODE_CAISSE.test(c?.code ?? ""))
+    throw new ErreurInvariant("I-1", `code de caisse invalide : ${JSON.stringify(c?.code)}`);
+  if (typeof c.ouverte !== "boolean")
+    throw new ErreurInvariant("I-1", "ouverte doit être un booléen");
+  if (!Number.isInteger(c.prochainePosition) || c.prochainePosition < 1)
+    throw new ErreurInvariant("I-2", `prochainePosition invalide : ${JSON.stringify(c.prochainePosition)}`);
+  if (!Number.isInteger(c.capacite) || c.capacite < 1)
+    throw new ErreurInvariant("I-6", `capacite invalide : ${JSON.stringify(c.capacite)}`);
+  return c;
+}
+
+/** I-1 — `caisse` et `position` sont immuables après création. */
+function verifierImmuables(ancien, nouveau){
+  for (const champ of ["id", "caisse", "position", "dateSaisie"]){
+    if (ancien[champ] !== nouveau[champ]){
+      throw new ErreurInvariant("I-1",
+        `${champ} est immuable après création : ${JSON.stringify(ancien[champ])} → ${JSON.stringify(nouveau[champ])}`);
+    }
+  }
+  return nouveau;
+}
+
+/** I-2 — `prochainePosition` ne décroît jamais. */
+function verifierProgression(ancienne, nouvelle){
+  if (nouvelle.prochainePosition < ancienne.prochainePosition){
+    throw new ErreurInvariant("I-2",
+      `prochainePosition ne peut pas décroître : ${ancienne.prochainePosition} → ${nouvelle.prochainePosition}`);
+  }
+  return nouvelle;
+}
+
+// ---------------------------------------------------------------------------
+// IndexedDB — surface volontairement étroite : open, transaction, get, getAll,
+// add, put, et un index. Rien de plus, pour que L2 ait peu à remplacer.
+// ---------------------------------------------------------------------------
+
+let basePromesse = null;
+let compteurSession = 0;
+
+function promesse(requete){
+  return new Promise((resoudre, rejeter) => {
+    requete.onsuccess = () => resoudre(requete.result);
+    requete.onerror = () => rejeter(requete.error);
+  });
+}
+
+function ouvrirBase(){
+  basePromesse ||= new Promise((resoudre, rejeter) => {
+    const requete = indexedDB.open(BASE, VERSION_SCHEMA);
+    requete.onupgradeneeded = () => {
+      const base = requete.result;
+      const disques = base.createObjectStore("disques", { keyPath: "id" });
+      disques.createIndex("ean", "ean");   // les fiches sans EAN ne sont pas indexées
+      disques.createIndex("caisse", "caisse");
+      base.createObjectStore("caisses", { keyPath: "code" });
+      base.createObjectStore("meta", { keyPath: "cle" });
+    };
+    requete.onsuccess = () => resoudre(requete.result);
+    requete.onerror = () => rejeter(requete.error);
+  });
+  return basePromesse;
+}
+
+async function transaction(magasins, mode, travail){
+  const base = await ouvrirBase();
+  const tx = base.transaction(magasins, mode);
+  const fini = new Promise((resoudre, rejeter) => {
+    tx.oncomplete = () => resoudre();
+    tx.onerror = () => rejeter(tx.error);
+    tx.onabort = () => rejeter(tx.error || new Error("transaction annulée"));
+  });
+  const resultat = await travail(nom => tx.objectStore(nom));
+  await fini;
+  return resultat;
+}
+
+const copie = valeur => structuredClone(valeur);
+
+async function lireMeta(magasin, cle, defaut){
+  const enregistrement = await promesse(magasin.get(cle));
+  return enregistrement === undefined ? defaut : enregistrement.valeur;
+}
+
+// ---------------------------------------------------------------------------
+// API publique — huit fonctions, et rien d'autre.
+// ---------------------------------------------------------------------------
+
+/**
+ * Ouvre une caisse et lui attribue le prochain code libre.
+ * Les codes sont attribués en continu (C01, C02, …) ; un code retiré n'est
+ * jamais réattribué, le compteur ne fait que croître.
+ */
+export async function ouvrirCaisse(capacite){
+  if (!Number.isInteger(capacite) || capacite < 1){
+    throw new ErreurInvariant("I-6",
+      `capacite doit être un entier positif — reçu ${JSON.stringify(capacite)}`);
+  }
+  return transaction(["caisses", "meta"], "readwrite", async magasin => {
+    const meta = magasin("meta");
+    const prochain = await lireMeta(meta, "prochainCodeCaisse", 1);
+    const caisse = validerCaisse({
+      code: "C" + String(prochain).padStart(2, "0"),
+      ouverte: true,
+      prochainePosition: 1,
+      capacite,
+    });
+    await promesse(magasin("caisses").add(caisse));
+    await promesse(meta.put({ cle: "prochainCodeCaisse", valeur: prochain + 1 }));
+    return copie(caisse);
+  });
+}
+
+/**
+ * La caisse de travail : la dernière ouverte qui n'a pas été fermée.
+ * Plusieurs caisses peuvent l'être en même temps (SPEC §3).
+ */
+export async function caisseCourante(){
+  return transaction(["caisses"], "readonly", async magasin => {
+    const toutes = await promesse(magasin("caisses").getAll());
+    const ouvertes = toutes.map(validerCaisse).filter(c => c.ouverte);
+    if (!ouvertes.length) return null;
+    ouvertes.sort((a, b) => a.code.localeCompare(b.code));
+    return copie(ouvertes[ouvertes.length - 1]);
+  });
+}
+
+/**
+ * Ferme une caisse. `prochainePosition` est conservée : une caisse rouverte
+ * reprendra sa numérotation là où elle s'était arrêtée (I-2).
+ */
+export async function fermerCaisse(code){
+  return transaction(["caisses"], "readwrite", async magasin => {
+    const caisses = magasin("caisses");
+    const caisse = await promesse(caisses.get(code));
+    if (caisse === undefined)
+      throw new ErreurInvariant("I-12", `caisse inconnue : ${JSON.stringify(code)}`);
+    validerCaisse(caisse);
+    const fermee = verifierProgression(caisse, { ...caisse, ouverte: false });
+    await promesse(caisses.put(validerCaisse(fermee)));
+    return copie(fermee);
+  });
+}
+
+/**
+ * Ajoute un disque dans la caisse courante.
+ * Un EAN déjà présent n'ouvre pas de seconde fiche : la quantité est
+ * incrémentée et `doublon` vaut true (I-3). L'emplacement du premier
+ * exemplaire est rendu tel quel, jamais recalculé (I-1).
+ */
+export async function ajouterDisque({ ean = null, photoCle = null } = {}){
+  if (ean !== null && !FORMAT_EAN.test(ean)){
+    throw new ErreurInvariant("I-3", `ean invalide : ${JSON.stringify(ean)}`);
+  }
+  if (photoCle !== null && typeof photoCle !== "string"){
+    throw new ErreurInvariant("I-12", `photoCle invalide : ${JSON.stringify(photoCle)}`);
+  }
+
+  return transaction(["disques", "caisses"], "readwrite", async magasin => {
+    const disques = magasin("disques");
+    const caisses = magasin("caisses");
+
+    if (ean !== null){
+      const existants = await promesse(disques.index("ean").getAll(ean));
+      if (existants.length){
+        const ancien = validerDisque(existants[0]);
+        const nouveau = verifierImmuables(ancien, { ...ancien, quantite: ancien.quantite + 1 });
+        await promesse(disques.put(validerDisque(nouveau)));
+        compteurSession++;
+        return { disque: copie(nouveau), doublon: true };
+      }
+    }
+
+    const toutes = await promesse(caisses.getAll());
+    const ouvertes = toutes.map(validerCaisse).filter(c => c.ouverte)
+      .sort((a, b) => a.code.localeCompare(b.code));
+    if (!ouvertes.length) throw new ErreurInvariant("I-1", "aucune caisse ouverte");
+    const caisse = ouvertes[ouvertes.length - 1];
+
+    // I-2 — la position visée doit être libre. `prochainePosition` seule ne
+    // suffit pas : comparée à la valeur qu'on vient de lire, elle ne détecte
+    // pas une valeur déjà revenue en arrière, qui produirait un doublon
+    // d'emplacement en silence. On regarde les positions réellement occupées.
+    const voisins = await promesse(disques.index("caisse").getAll(caisse.code));
+    const occupees = new Set(voisins.map(d => validerDisque(d).position));
+    if (occupees.has(caisse.prochainePosition)){
+      throw new ErreurInvariant("I-2",
+        `l'emplacement ${caisse.code}-${String(caisse.prochainePosition).padStart(3, "0")} est déjà occupé — une position libérée n'est jamais réattribuée`);
+    }
+
+    const disque = validerDisque({
+      id: crypto.randomUUID(),
+      ean,
+      titre: "",
+      tmdbId: null,
+      annee: null,
+      realisateur: null,
+      duree: null,
+      genres: [],
+      caisse: caisse.code,
+      position: caisse.prochainePosition,
+      quantite: 1,
+      statut: "EN_STOCK",
+      prixGibert: null,
+      prixEbay: null,
+      etatBoitier: null,
+      notes: "",
+      lotId: null,
+      photoCle,
+      dateSaisie: Date.now(),
+      dateVente: null,
+    });
+
+    const avancee = verifierProgression(caisse,
+      { ...caisse, prochainePosition: caisse.prochainePosition + 1 });
+    await promesse(disques.add(disque));
+    await promesse(caisses.put(validerCaisse(avancee)));
+    compteurSession++;
+    return { disque: copie(disque), doublon: false };
+  });
+}
+
+/** La fiche portant cet EAN, ou null. */
+export async function chercherParEan(ean){
+  if (ean === null || !FORMAT_EAN.test(ean ?? "")) return null;
+  return transaction(["disques"], "readonly", async magasin => {
+    const trouves = await promesse(magasin("disques").index("ean").getAll(ean));
+    return trouves.length ? copie(validerDisque(trouves[0])) : null;
+  });
+}
+
+/**
+ * Les disques, triés par caisse puis par position croissante — l'ordre du
+ * picking. Filtre facultatif : { caisse, statut, avecEan }.
+ */
+export async function listerDisques(filtre = {}){
+  return transaction(["disques"], "readonly", async magasin => {
+    let disques = (await promesse(magasin("disques").getAll())).map(validerDisque);
+    if (filtre.caisse !== undefined) disques = disques.filter(d => d.caisse === filtre.caisse);
+    if (filtre.statut !== undefined) disques = disques.filter(d => d.statut === filtre.statut);
+    if (filtre.avecEan === true) disques = disques.filter(d => d.ean !== null);
+    if (filtre.avecEan === false) disques = disques.filter(d => d.ean === null);
+    disques.sort((a, b) => a.caisse.localeCompare(b.caisse) || a.position - b.position);
+    return copie(disques);
+  });
+}
+
+/** Nombre de disques passés depuis le chargement de l'application. */
+export function compterSession(){
+  return compteurSession;
+}
+
+/** L'intégralité des données, prête à être écrite dans un fichier JSON. */
+export async function exporterTout(){
+  return transaction(["disques", "caisses", "meta"], "readonly", async magasin => {
+    const disques = (await promesse(magasin("disques").getAll())).map(validerDisque);
+    const caisses = (await promesse(magasin("caisses").getAll())).map(validerCaisse);
+    const meta = await promesse(magasin("meta").getAll());
+    disques.sort((a, b) => a.caisse.localeCompare(b.caisse) || a.position - b.position);
+    caisses.sort((a, b) => a.code.localeCompare(b.code));
+    return copie({
+      format: "dvd-stock",
+      versionSchema: VERSION_SCHEMA,
+      dateExport: Date.now(),
+      caisses,
+      disques,
+      meta,
+    });
+  });
+}
