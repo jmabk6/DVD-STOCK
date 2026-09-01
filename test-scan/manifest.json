@@ -1,0 +1,9 @@
+{
+  "name": "Test scan DVD",
+  "short_name": "Test scan",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#0B211F",
+  "theme_color": "#123331",
+  "orientation": "portrait"
+}
