@@ -113,7 +113,9 @@ function majBandeau(alerteCapacite = false){
 }
 
 function majBoutons(){
-  const principal = $("btn"), second = $("b-torche");
+  const principal = $("btn"), caisses = $("b-caisses"), second = $("b-torche");
+  caisses.hidden = true;
+  second.hidden = true;
   if (mode === "panneau"){
     principal.textContent = "Ouvrir la caisse";
     second.textContent = "Annuler";
@@ -122,8 +124,12 @@ function majBoutons(){
     principal.textContent = "Photographier la jaquette";
     second.textContent = "Sans photo";
     second.hidden = false;
+  } else if (mode === "liste"){
+    principal.textContent = "Retour à la saisie";
   } else {
-    principal.textContent = "Caisses";
+    principal.textContent = "Liste";
+    caisses.textContent = "Caisses";
+    caisses.hidden = false;
     second.textContent = "Lampe";
     second.hidden = !torcheDisponible;
   }
@@ -172,10 +178,100 @@ function annoncer(texte, alerte = false){
 }
 
 // ---------------------------------------------------------------------------
+// Liste minimale — emplacement, EAN, vignette, quantité, date.
+// Triée par caisse puis position. Aucun filtre, aucune grille : c'est L4.
+// ---------------------------------------------------------------------------
+
+const PIXEL_VIDE = "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
+
+let observateurVignettes = null;
+const urlsListe = [];
+
+const dateCourte = t => new Date(t).toLocaleDateString("fr-FR",
+  { day: "2-digit", month: "2-digit", year: "2-digit" });
+
+async function ouvrirListe(){
+  mode = "liste";
+  enAttente = null;
+  $("liste").hidden = false;
+  majBoutons();
+
+  const disques = await store.listerDisques();          // déjà trié caisse puis position
+  const exemplaires = disques.reduce((n, d) => n + d.quantite, 0);
+  $("liste-tete").innerHTML = disques.length
+    ? `<b>${disques.length}</b> fiches · <b>${exemplaires}</b> exemplaires`
+    : "";
+
+  const corps = $("liste-corps");
+  corps.innerHTML = "";
+  if (!disques.length){
+    corps.innerHTML = `<div class="liste-vide">Aucun disque saisi pour l'instant.<br>
+      Revenez à la saisie et scannez un code-barres.</div>`;
+    return;
+  }
+
+  let caisseAffichee = null;
+  const fragment = document.createDocumentFragment();
+  for (const d of disques){
+    if (d.caisse !== caisseAffichee){
+      caisseAffichee = d.caisse;
+      const titre = document.createElement("div");
+      titre.className = "caisse-titre";
+      titre.textContent = d.caisse;
+      fragment.appendChild(titre);
+    }
+    const entree = document.createElement("div");
+    entree.className = "entree";
+    entree.innerHTML =
+      (d.photoCle
+        ? `<img class="vignette" alt="" src="${PIXEL_VIDE}" data-cle="${d.photoCle}">`
+        : `<div class="sans-image"></div>`) +
+      `<div class="infos">
+         <div class="place">${d.caisse}-${String(d.position).padStart(3, "0")}</div>
+         <div class="detail">${d.ean ?? "sans code-barres"} · ${dateCourte(d.dateSaisie)}</div>
+       </div>
+       <div class="quantite${d.quantite > 1 ? " multiple" : ""}">×${d.quantite}</div>`;
+    fragment.appendChild(entree);
+  }
+  corps.appendChild(fragment);
+
+  // Les jaquettes ne sont lues qu'à l'approche de l'écran : trois mille fiches
+  // ne peuvent pas tenir trois mille blobs ouverts en même temps.
+  observateurVignettes = new IntersectionObserver(async entrees => {
+    for (const e of entrees){
+      if (!e.isIntersecting) continue;
+      observateurVignettes.unobserve(e.target);
+      const photo = await store.lirePhoto(e.target.dataset.cle);
+      if (!photo) continue;
+      const url = URL.createObjectURL(photo.donnees);
+      urlsListe.push(url);
+      e.target.src = url;
+    }
+  }, { root: corps, rootMargin: "300px" });
+  corps.querySelectorAll("img.vignette[data-cle]").forEach(i => observateurVignettes.observe(i));
+}
+
+function nettoyerListe(){
+  observateurVignettes?.disconnect();
+  observateurVignettes = null;
+  while (urlsListe.length) URL.revokeObjectURL(urlsListe.pop());
+  $("liste-corps").innerHTML = "";
+  $("liste").hidden = true;
+}
+
+function fermerListe(){
+  nettoyerListe();
+  mode = "attente";
+  majBoutons();
+  annoncer(caisse ? "Présentez le code-barres" : "Ouvrez une caisse pour commencer");
+}
+
+// ---------------------------------------------------------------------------
 // Panneau de caisse
 // ---------------------------------------------------------------------------
 
 async function ouvrirPanneau(){
+  nettoyerListe();
   mode = "panneau";
   enAttente = null;
   $("panneau").hidden = false;
@@ -233,6 +329,9 @@ async function reprendre(code){
 
 /** Un code vient d'être accepté par le scanner. */
 async function surLecture(ean){
+  // On consulte la liste : ce n'est pas le moment de saisir.
+  if (mode === "liste") return;
+
   if (!caisse){
     // Le cas du tout début de session : un boîtier passe devant l'objectif
     // avant qu'une caisse existe. Message clair, jamais d'erreur technique.
@@ -405,8 +504,11 @@ const scanner = creerScanner({
 $("btn").addEventListener("click", () => {
   if (mode === "panneau") creerCaisse();
   else if (mode === "jaquette") photographier();
-  else ouvrirPanneau();
+  else if (mode === "liste") fermerListe();
+  else ouvrirListe();
 });
+
+$("b-caisses").addEventListener("click", () => ouvrirPanneau());
 
 $("b-torche").addEventListener("click", async () => {
   if (mode === "panneau"){ fermerPanneau(); annoncer("Présentez le code-barres"); return; }

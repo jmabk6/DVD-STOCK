@@ -22,6 +22,10 @@
     <span class="compte" id="compte">0</span>
   </div>
 
+  <!-- Viseur et fiche. La liste vient recouvrir ce bloc, sans masquer ni le
+       bandeau ni les boutons. -->
+  <div class="corps-ecran" id="corps-ecran">
+
   <div class="viseur" id="viseur">
     <video id="video" playsinline muted autoplay></video>
     <div class="reticule"><span></span><span></span><span></span><span></span></div>
@@ -55,8 +59,18 @@
     </div>
   </div>
 
+  <!-- Liste minimale : emplacement, EAN, vignette, quantité, date.
+       Triée par caisse puis position. Aucun filtre, aucune grille — c'est L4. -->
+  <div class="liste" id="liste" hidden>
+    <div class="liste-tete" id="liste-tete">…</div>
+    <div class="liste-corps" id="liste-corps"></div>
+  </div>
+
+  </div><!-- /corps-ecran -->
+
   <div class="action">
     <button class="btn" id="btn">Ouvrir une caisse</button>
+    <button class="btn discret" id="b-caisses" hidden>Caisses</button>
     <button class="btn discret" id="b-torche" hidden>Lampe</button>
   </div>
 
