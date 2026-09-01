@@ -1,0 +1,112 @@
+/* app.css — jetons visuels et mise en page.
+   Les couleurs et la typographie viennent de la maquette saisie.html.
+   Les polices sont servies par le dépôt : aucune requête externe (I-9). */
+
+@font-face{
+  font-family:'Archivo';
+  src:url('../vendor/fonts/archivo-latin-var.woff2') format('woff2');
+  font-weight:100 900;
+  font-style:normal;
+  font-display:swap;
+}
+@font-face{
+  font-family:'DM Mono';
+  src:url('../vendor/fonts/dm-mono-500-latin.woff2') format('woff2');
+  font-weight:500;
+  font-style:normal;
+  font-display:swap;
+}
+
+:root{
+  --petrol:#123331;
+  --petrol-deep:#0B211F;
+  --paper:#DFE3D9;
+  --card:#F5F4EE;
+  --stamp:#A8392C;
+  --valid:#2F6F4E;
+  --amber:#B4761B;
+  --line:#B7BEB1;
+  --mute:#6E7A72;
+
+  --texte:Archivo,system-ui,-apple-system,sans-serif;
+  --mono:'DM Mono',ui-monospace,monospace;
+}
+
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{height:100%}
+body{
+  background:var(--paper);
+  color:var(--petrol);
+  font-family:var(--texte);
+  display:flex;flex-direction:column;
+  height:100dvh;overflow:hidden;
+}
+
+/* ---------- bandeau ---------- */
+header{
+  background:var(--petrol);color:var(--card);
+  padding:10px 14px;flex-shrink:0;
+  display:flex;align-items:baseline;gap:10px;
+}
+header h1{font-size:16px;font-weight:600;letter-spacing:-.01em}
+header .compte{
+  margin-left:auto;
+  font-family:var(--mono);font-size:15px;color:#9FB5AF;
+}
+
+/* ---------- viseur ---------- */
+#viseur{position:relative;background:#0A1817;flex-shrink:0;height:40vh;overflow:hidden}
+#video{width:100%;height:100%;object-fit:cover;display:block}
+#cadre{
+  position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  width:74%;height:34%;
+  border:2px solid rgba(223,227,217,.55);border-radius:3px;
+  pointer-events:none;
+}
+#cadre.verrouille{border-color:var(--valid);border-width:4px}
+#etat{
+  position:absolute;left:0;right:0;bottom:10px;text-align:center;
+  color:#CFE0DC;font-size:13px;text-shadow:0 1px 3px #000;
+}
+
+/* ---------- diagnostic ---------- */
+#diag{
+  background:var(--card);border-bottom:1px solid var(--line);
+  padding:9px 14px;font-size:13px;line-height:1.65;flex-shrink:0;
+}
+#diag b{font-weight:600}
+.ok{color:var(--valid);font-weight:600}
+.ko{color:var(--stamp);font-weight:600}
+.attente{color:var(--amber);font-weight:600}
+
+/* ---------- journal ---------- */
+#journal{flex:1;overflow-y:auto;padding:10px 12px}
+.lecture{
+  background:var(--card);border:1px solid var(--line);
+  padding:10px 12px;margin-bottom:7px;
+  display:flex;align-items:baseline;gap:10px;
+}
+.lecture code{font-family:var(--mono);font-size:17px;font-weight:500;flex:1;letter-spacing:.02em}
+.lecture .ms{font-family:var(--mono);font-size:14px;color:var(--mute)}
+.lecture.doublon{border-color:var(--amber);background:#F7F0E2}
+.lecture.doublon .ms{color:var(--amber);font-weight:500}
+#vide{color:var(--mute);font-size:14px;text-align:center;padding:26px 20px;line-height:1.6}
+
+/* ---------- pied ---------- */
+footer{
+  flex-shrink:0;display:flex;gap:1px;
+  background:var(--line);border-top:1px solid var(--line);
+}
+footer button{
+  flex:1;background:var(--card);border:0;color:var(--petrol);
+  font-family:inherit;font-size:15px;
+  padding:15px 6px calc(15px + env(safe-area-inset-bottom));
+  cursor:pointer;
+}
+footer button:active{background:var(--paper)}
+footer button.active{background:var(--petrol);color:var(--card);font-weight:600}
+footer button:focus-visible{outline:3px solid var(--stamp);outline-offset:-3px}
+
+@media(prefers-reduced-motion:reduce){
+  *{animation:none!important;transition:none!important}
+}

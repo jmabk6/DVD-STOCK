@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="DVD">
+<meta name="theme-color" content="#123331">
+<title>DVD — Stock</title>
+<link rel="manifest" href="./manifest.json">
+<link rel="apple-touch-icon" href="./icones/icone-180.png">
+<link rel="stylesheet" href="./css/app.css">
+</head>
+<body>
+
+<header>
+  <h1>DVD — diagnostic</h1>
+  <span class="compte"><span id="compte">0</span> lus</span>
+</header>
+
+<div id="viseur">
+  <video id="video" playsinline muted autoplay></video>
+  <div id="cadre"></div>
+  <div id="etat">Initialisation…</div>
+</div>
+
+<div id="diag">
+  <div><b>Lancée depuis l'icône :</b> <span id="d-pwa">…</span></div>
+  <div><b>Décodeur WASM :</b> <span id="d-wasm">…</span></div>
+  <div><b>Polices :</b> <span id="d-polices">…</span></div>
+  <div><b>Cache hors ligne :</b> <span id="d-cache">…</span></div>
+  <div><b>Caméra :</b> <span id="d-cam">…</span></div>
+  <div><b>Cadence de décodage :</b> <span id="d-cadence">…</span></div>
+</div>
+
+<div id="journal">
+  <div id="vide">Présentez le code-barres d'un DVD.<br>
+    Chaque lecture s'affiche ici avec son temps d'accroche.</div>
+</div>
+
+<footer>
+  <button id="b-torche" hidden>Lampe</button>
+  <button id="b-vider">Vider</button>
+</footer>
+
+<script type="module" src="./js/app.js"></script>
+</body>
+</html>
