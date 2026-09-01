@@ -255,8 +255,9 @@ async function testI2(){
   const fermee = await store.fermerCaisse("C01");
   egal(fermee.prochainePosition, 8, "I-2 : fermer ne remet pas le compteur à zéro");
 
-  // Rouvrir (commit 3) : la numérotation reprend où elle s'était arrêtée.
-  planter(base, "caisses", { ...lireBrut(base, "caisses", "C01"), ouverte: true });
+  // Rouvrir : la numérotation reprend où elle s'était arrêtée.
+  const rouverte = await store.rouvrirCaisse("C01");
+  egal(rouverte.prochainePosition, 8, "I-2 : rouvrir ne remet pas le compteur à zéro");
   const { disque: huitieme } = await store.ajouterDisque({ ean: null });
   egal(huitieme.position, 8, "I-2 : une caisse rouverte reprend à 8, pas à 1");
 
@@ -356,8 +357,9 @@ async function testI12(){
   // Aucune fonction de suppression n'est exposée.
   const api = Object.keys(store).filter(n => typeof store[n] === "function").sort();
   egal(api, ["ajouterDisque", "caisseCourante", "chercherParEan", "compterSession",
-             "exporterTout", "fermerCaisse", "listerDisques", "ouvrirCaisse"],
-    "I-12 : l'API est exactement les huit fonctions prévues");
+             "exporterTout", "fermerCaisse", "listerCaisses", "listerDisques",
+             "ouvrirCaisse", "rouvrirCaisse"],
+    "I-12 : l'API est exactement les dix fonctions prévues");
   verifier(!api.some(n => /suppr|efface|retire|delete|remove/i.test(n)),
     "I-12 : aucune fonction de suppression exposée");
 
@@ -388,6 +390,86 @@ async function testI12(){
     "I-12 : la base contient autant d'enregistrements que de fiches créées");
   egal(tout.caisses.length, 2, "I-12 : une caisse fermée reste dans les données");
   egal(tout.caisses.map(c => c.ouverte), [false, true], "I-12 : la fermeture est un état, pas un retrait");
+}
+
+// ===========================================================================
+// Caisses — le scénario de validation du commit 3 :
+// ouvrir une caisse de 5, y mettre 7 disques, la fermer, en ouvrir une autre,
+// vérifier les emplacements.
+// ===========================================================================
+async function testCaisses(){
+  const { store } = await storeNeuf();
+
+  const c1 = await store.ouvrirCaisse(5);
+  egal([c1.code, c1.capacite, c1.prochainePosition], ["C01", 5, 1], "caisses : C01 ouverte à 5");
+
+  // Sept disques dans une caisse annoncée à cinq.
+  const suivi = [];
+  for (let i = 0; i < 7; i++){
+    const r = await store.ajouterDisque({ ean: null });
+    suivi.push({
+      emplacement: r.disque.caisse + "-" + String(r.disque.position).padStart(3, "0"),
+      annoncee: r.capacite.annoncee,
+      occupee: r.capacite.occupee,
+      atteinte: r.capacite.atteinte,
+    });
+  }
+
+  egal(suivi.map(s => s.emplacement),
+    ["C01-001", "C01-002", "C01-003", "C01-004", "C01-005", "C01-006", "C01-007"],
+    "caisses : sept emplacements consécutifs dans C01");
+
+  // L'avertissement part au cinquième et ne s'arrête plus.
+  egal(suivi.map(s => s.atteinte), [false, false, false, false, true, true, true],
+    "caisses : la capacité est signalée atteinte à partir du cinquième disque");
+  egal(suivi.map(s => s.occupee), [1, 2, 3, 4, 5, 6, 7], "caisses : occupation suivie disque par disque");
+
+  // « JM peut continuer, la capacité s'ajuste » : elle suit le réel.
+  egal(suivi.map(s => s.annoncee), [5, 5, 5, 5, 5, 5, 6],
+    "caisses : la capacité annoncée s'ajuste une fois dépassée");
+  egal((await store.listerCaisses({ ouverte: true }))[0].capacite, 7,
+    "caisses : après sept disques, la caisse annonce sept");
+
+  // Rien n'a été fermé ni bloqué : le store signale, il ne décide pas (I-5).
+  egal((await store.caisseCourante()).code, "C01", "caisses : dépasser la capacité ne ferme pas la caisse");
+
+  // Fermer avant d'être plein est permis, et en ouvrir une autre repart à 1.
+  await store.fermerCaisse("C01");
+  const c2 = await store.ouvrirCaisse(3);
+  egal([c2.code, c2.prochainePosition], ["C02", 1], "caisses : une caisse neuve commence à 1");
+  const { disque: premierC2 } = await store.ajouterDisque({ ean: EAN_A });
+  egal([premierC2.caisse, premierC2.position], ["C02", 1], "caisses : le disque suivant va dans C02");
+
+  // Un code retiré n'est jamais réattribué.
+  await store.fermerCaisse("C02");
+  const c3 = await store.ouvrirCaisse(4);
+  egal(c3.code, "C03", "caisses : après C01 et C02 fermées, la suivante est C03, pas C01");
+  await store.fermerCaisse("C03");
+  egal((await store.ouvrirCaisse(4)).code, "C04", "caisses : le compteur de codes ne redescend jamais");
+
+  // Rouvrir reprend la numérotation, sans toucher au code.
+  await store.fermerCaisse("C04");
+  const reprise = await store.rouvrirCaisse("C01");
+  egal([reprise.code, reprise.ouverte, reprise.prochainePosition], ["C01", true, 8],
+    "caisses : C01 rouverte reprend à 8");
+  const { disque: huitieme } = await store.ajouterDisque({ ean: EAN_B });
+  egal(huitieme.caisse + "-" + String(huitieme.position).padStart(3, "0"), "C01-008",
+    "caisses : le disque suivant prend C01-008, jamais C01-001");
+
+  // Rouvrir est idempotent ; rouvrir l'inconnu est refusé.
+  egal((await store.rouvrirCaisse("C01")).prochainePosition, 9,
+    "caisses : rouvrir une caisse déjà ouverte ne change rien");
+  await leve("I-12", () => store.rouvrirCaisse("C99"), "caisses : rouvrir une caisse inconnue est refusé");
+
+  // Aucune position en double, sur l'ensemble des caisses.
+  const tous = await store.listerDisques();
+  const emplacements = tous.map(d => d.caisse + "-" + d.position);
+  egal(new Set(emplacements).size, emplacements.length, "caisses : aucun emplacement en double");
+
+  egal((await store.listerCaisses()).map(c => c.code), ["C01", "C02", "C03", "C04"],
+    "caisses : listerCaisses rend toutes les caisses, par code croissant");
+  egal((await store.listerCaisses({ ouverte: true })).map(c => c.code), ["C01"],
+    "caisses : le filtre ouverte fonctionne");
 }
 
 // ===========================================================================
@@ -439,6 +521,7 @@ const suites = [
   ["I-3  doublons", testI3],
   ["I-6  centimes entiers", testI6],
   ["I-12 aucune suppression", testI12],
+  ["      caisses et emplacements", testCaisses],
   ["API  contrôles complémentaires", testApi],
 ];
 

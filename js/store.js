@@ -100,7 +100,24 @@ function verifierProgression(ancienne, nouvelle){
     throw new ErreurInvariant("I-2",
       `prochainePosition ne peut pas décroître : ${ancienne.prochainePosition} → ${nouvelle.prochainePosition}`);
   }
+  if (nouvelle.capacite < ancienne.capacite){
+    throw new ErreurInvariant("I-2",
+      `capacite ne peut pas décroître : ${ancienne.capacite} → ${nouvelle.capacite}`);
+  }
   return nouvelle;
+}
+
+/**
+ * Où en est le remplissage d'une caisse.
+ * Le store signale, il ne décide pas : ni fermeture automatique, ni blocage
+ * (I-5). L'écran avertit, l'utilisateur continue s'il veut.
+ */
+function etatCapacite(caisse, occupee){
+  return {
+    annoncee: caisse.capacite,   // ce que la caisse annonçait avant cet ajout
+    occupee,
+    atteinte: occupee >= caisse.capacite,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -156,7 +173,7 @@ async function lireMeta(magasin, cle, defaut){
 }
 
 // ---------------------------------------------------------------------------
-// API publique — huit fonctions, et rien d'autre.
+// API publique — dix fonctions, et rien d'autre.
 // ---------------------------------------------------------------------------
 
 /**
@@ -216,10 +233,44 @@ export async function fermerCaisse(code){
 }
 
 /**
+ * Rouvre une caisse fermée.
+ * Ouvrir et rouvrir sont deux intentions distinctes : `ouvrirCaisse` crée une
+ * caisse et lui attribue un code neuf, `rouvrirCaisse` reprend une caisse
+ * existante. La numérotation repart où elle s'était arrêtée, jamais à 1 (I-2).
+ * Rouvrir une caisse déjà ouverte ne fait rien et ne lève pas d'erreur.
+ */
+export async function rouvrirCaisse(code){
+  return transaction(["caisses"], "readwrite", async magasin => {
+    const caisses = magasin("caisses");
+    const caisse = await promesse(caisses.get(code));
+    if (caisse === undefined)
+      throw new ErreurInvariant("I-12", `caisse inconnue : ${JSON.stringify(code)}`);
+    validerCaisse(caisse);
+    const rouverte = verifierProgression(caisse, { ...caisse, ouverte: true });
+    await promesse(caisses.put(validerCaisse(rouverte)));
+    return copie(rouverte);
+  });
+}
+
+/** Les caisses, par code croissant. Filtre facultatif : { ouverte }. */
+export async function listerCaisses(filtre = {}){
+  return transaction(["caisses"], "readonly", async magasin => {
+    let caisses = (await promesse(magasin("caisses").getAll())).map(validerCaisse);
+    if (filtre.ouverte !== undefined) caisses = caisses.filter(c => c.ouverte === filtre.ouverte);
+    caisses.sort((a, b) => a.code.localeCompare(b.code));
+    return copie(caisses);
+  });
+}
+
+/**
  * Ajoute un disque dans la caisse courante.
  * Un EAN déjà présent n'ouvre pas de seconde fiche : la quantité est
  * incrémentée et `doublon` vaut true (I-3). L'emplacement du premier
  * exemplaire est rendu tel quel, jamais recalculé (I-1).
+ *
+ * Rend `{ disque, doublon, capacite }`. `capacite` porte l'état du remplissage
+ * — `{ annoncee, occupee, atteinte }` — pour que l'écran puisse avertir. Le
+ * store n'en tire aucune conséquence : il ne ferme rien et ne bloque rien.
  */
 export async function ajouterDisque({ ean = null, photoCle = null } = {}){
   if (ean !== null && !FORMAT_EAN.test(ean)){
@@ -233,6 +284,14 @@ export async function ajouterDisque({ ean = null, photoCle = null } = {}){
     const disques = magasin("disques");
     const caisses = magasin("caisses");
 
+    const toutes = await promesse(caisses.getAll());
+    const ouvertes = toutes.map(validerCaisse).filter(c => c.ouverte)
+      .sort((a, b) => a.code.localeCompare(b.code));
+    if (!ouvertes.length) throw new ErreurInvariant("I-1", "aucune caisse ouverte");
+    const caisse = ouvertes[ouvertes.length - 1];
+
+    const voisins = (await promesse(disques.index("caisse").getAll(caisse.code))).map(validerDisque);
+
     if (ean !== null){
       const existants = await promesse(disques.index("ean").getAll(ean));
       if (existants.length){
@@ -240,22 +299,20 @@ export async function ajouterDisque({ ean = null, photoCle = null } = {}){
         const nouveau = verifierImmuables(ancien, { ...ancien, quantite: ancien.quantite + 1 });
         await promesse(disques.put(validerDisque(nouveau)));
         compteurSession++;
-        return { disque: copie(nouveau), doublon: true };
+        // Un doublon ne consomme aucun emplacement : la caisse ne bouge pas.
+        return {
+          disque: copie(nouveau),
+          doublon: true,
+          capacite: etatCapacite(caisse, voisins.length),
+        };
       }
     }
-
-    const toutes = await promesse(caisses.getAll());
-    const ouvertes = toutes.map(validerCaisse).filter(c => c.ouverte)
-      .sort((a, b) => a.code.localeCompare(b.code));
-    if (!ouvertes.length) throw new ErreurInvariant("I-1", "aucune caisse ouverte");
-    const caisse = ouvertes[ouvertes.length - 1];
 
     // I-2 — la position visée doit être libre. `prochainePosition` seule ne
     // suffit pas : comparée à la valeur qu'on vient de lire, elle ne détecte
     // pas une valeur déjà revenue en arrière, qui produirait un doublon
     // d'emplacement en silence. On regarde les positions réellement occupées.
-    const voisins = await promesse(disques.index("caisse").getAll(caisse.code));
-    const occupees = new Set(voisins.map(d => validerDisque(d).position));
+    const occupees = new Set(voisins.map(d => d.position));
     if (occupees.has(caisse.prochainePosition)){
       throw new ErreurInvariant("I-2",
         `l'emplacement ${caisse.code}-${String(caisse.prochainePosition).padStart(3, "0")} est déjà occupé — une position libérée n'est jamais réattribuée`);
@@ -284,12 +341,18 @@ export async function ajouterDisque({ ean = null, photoCle = null } = {}){
       dateVente: null,
     });
 
-    const avancee = verifierProgression(caisse,
-      { ...caisse, prochainePosition: caisse.prochainePosition + 1 });
+    const capacite = etatCapacite(caisse, voisins.length + 1);
+    const avancee = verifierProgression(caisse, {
+      ...caisse,
+      prochainePosition: caisse.prochainePosition + 1,
+      // « JM peut continuer, la capacité s'ajuste » : la caisse s'est révélée
+      // plus grande qu'annoncée. La capacité suit le réel, et ne redescend jamais.
+      capacite: Math.max(caisse.capacite, capacite.occupee),
+    });
     await promesse(disques.add(disque));
     await promesse(caisses.put(validerCaisse(avancee)));
     compteurSession++;
-    return { disque: copie(disque), doublon: false };
+    return { disque: copie(disque), doublon: false, capacite };
   });
 }
 
