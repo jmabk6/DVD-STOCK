@@ -9,7 +9,7 @@
 // │ de servir la version en cache indéfiniment, pendant que le dépôt      │
 // │ avance. La panne est silencieuse et pénible à diagnostiquer.          │
 // └──────────────────────────────────────────────────────────────────────┘
-const VERSION = "dvd-stock-v9";
+const VERSION = "dvd-stock-v10";
 
 // Chemins relatifs à la portée du service worker : l'application marche
 // aussi bien à la racine que sous /DVD-STOCK/ sur GitHub Pages.
@@ -22,6 +22,7 @@ const RESSOURCES = [
   "./js/scanner.js",
   "./js/store.js",
   "./js/photo.js",
+  "./js/contours.js",
   "./vendor/zxing-wasm-3.1.3/reader/index.js",
   "./vendor/zxing-wasm-3.1.3/reader/zxing_reader.wasm",
   "./vendor/zxing-wasm-3.1.3/share.js",

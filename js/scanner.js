@@ -60,7 +60,7 @@ export function creerScanner({ video, surCode, surEchec, surEtat, surCamera, sur
   const canvas = document.createElement("canvas");
   const ctx = canvas.getContext("2d", { willReadFrequently: true });
 
-  let piste = null, actif = false, decodeurPret = false;
+  let piste = null, actif = false, decodeurPret = false, decodageActif = true;
   let verrouille = false, dernierCodeVu = 0, arme = performance.now();
   let dernierEchec = 0;
   let torcheAllumee = false;
@@ -105,7 +105,7 @@ export function creerScanner({ video, surCode, surEchec, surEtat, surCamera, sur
 
   async function boucle(){
     if (!actif) return;
-    if (decodeurPret && video.readyState >= 2 && !document.hidden){
+    if (decodageActif && decodeurPret && video.readyState >= 2 && !document.hidden){
       const echelle = REGLAGES.largeurAnalyse / video.videoWidth;
       canvas.width = REGLAGES.largeurAnalyse;
       canvas.height = Math.round(video.videoHeight * echelle);
@@ -171,5 +171,16 @@ export function creerScanner({ video, surCode, surEchec, surEtat, surCamera, sur
     return torcheAllumee;
   }
 
-  return { demarrer, arreter, basculerTorche, torcheDisponible };
+  /**
+   * Suspend ou reprend le décodage. La caméra reste allumée — c'est le point
+   * de I-8 — mais on ne cherche plus de code-barres. Pendant qu'on cadre une
+   * jaquette, le décodage ne sert à rien et prend du temps machine dont la
+   * détection de contours a besoin.
+   */
+  function decoder(oui){
+    decodageActif = oui;
+    if (!oui) rearmer();
+  }
+
+  return { demarrer, arreter, basculerTorche, torcheDisponible, decoder };
 }

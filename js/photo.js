@@ -22,6 +22,7 @@
 // simple, c'est le cadrage visible qui manquait, pas la confirmation.
 
 import { LARGEUR_PHOTO } from "./store.js";
+import { redresser } from "./contours.js";
 
 /** Largeur / hauteur d'un boîtier de DVD (135 × 190 mm). */
 export const RAPPORT_JAQUETTE = 135 / 190;
@@ -54,23 +55,44 @@ export function zoneCapture(largeurImage, hauteurImage){
 
 /**
  * Saisit la zone de jaquette du flux vidéo, réduite et compressée.
- * Rend { donnees: Blob, largeur, hauteur, octets, qualite }.
+ *
+ * `coins` (facultatif, normalisés 0–1) redresse la jaquette détectée par
+ * perspective au lieu de recadrer sur le cadre fixe. Si le redressement
+ * échoue, on retombe sur le cadre fixe sans rien dire : la détection est un
+ * bonus, jamais une condition.
+ *
+ * Rend { donnees: Blob, largeur, hauteur, octets, qualite, redressee }.
  * Lève si le flux n'a pas encore d'image exploitable.
  */
-export async function capturer(video){
+export async function capturer(video, { coins = null } = {}){
   if (!video || video.readyState < 2 || !video.videoWidth){
     throw new Error("le flux vidéo n'a pas encore d'image");
   }
 
-  const zone = zoneCapture(video.videoWidth, video.videoHeight);
+  let largeur, hauteur, redressee = false;
 
-  // Recadrage et réduction dans le même dessin : à aucun instant une pleine
-  // résolution n'existe hors du flux vidéo lui-même.
-  const largeur = Math.min(LARGEUR_PHOTO, zone.largeur);
-  const hauteur = Math.max(1, Math.round(zone.hauteur * (largeur / zone.largeur)));
-  toile.width = largeur;
-  toile.height = hauteur;
-  ctx.drawImage(video, zone.x, zone.y, zone.largeur, zone.hauteur, 0, 0, largeur, hauteur);
+  if (coins){
+    largeur = LARGEUR_PHOTO;
+    hauteur = Math.round(largeur / RAPPORT_JAQUETTE);
+    const redresse = redresser(video, coins, largeur, hauteur);
+    if (redresse){
+      toile.width = largeur;
+      toile.height = hauteur;
+      ctx.drawImage(redresse, 0, 0);
+      redressee = true;
+    }
+  }
+
+  if (!redressee){
+    const zone = zoneCapture(video.videoWidth, video.videoHeight);
+    // Recadrage et réduction dans le même dessin : à aucun instant une pleine
+    // résolution n'existe hors du flux vidéo lui-même.
+    largeur = Math.min(LARGEUR_PHOTO, zone.largeur);
+    hauteur = Math.max(1, Math.round(zone.hauteur * (largeur / zone.largeur)));
+    toile.width = largeur;
+    toile.height = hauteur;
+    ctx.drawImage(video, zone.x, zone.y, zone.largeur, zone.hauteur, 0, 0, largeur, hauteur);
+  }
 
   let donnees = null, qualite = null;
   for (const q of QUALITES){
@@ -79,7 +101,7 @@ export async function capturer(video){
     if (donnees.size <= CIBLE_OCTETS) break;
   }
 
-  return { donnees, largeur, hauteur, octets: donnees.size, qualite };
+  return { donnees, largeur, hauteur, octets: donnees.size, qualite, redressee };
 }
 
 function enBlob(toile, qualite){

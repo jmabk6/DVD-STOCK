@@ -16,9 +16,12 @@
 
 import { creerScanner, chargerDecodeur } from "./scanner.js";
 import { capturer, urlDeLaPhoto, zoneCapture } from "./photo.js";
+import { detecter } from "./contours.js";
 import * as store from "./store.js";
 
 const $ = id => document.getElementById(id);
+
+let scanner = null;   // assigné plus bas ; référencé avant par majBoutons
 
 const DUREE_TAMPON_MS = 2000;
 
@@ -148,7 +151,14 @@ function majBoutons(){
   $("cadre-photo").hidden = !enPhoto;
   if (enPhoto) ajusterCadrePhoto();
 
-  if (mode === "panneau"){
+  // Pendant qu'on cadre une jaquette, chercher un code-barres ne sert à rien
+  // et prend le temps machine dont la détection de contours a besoin.
+  scanner?.decoder(!enPhoto);
+  if (enPhoto) lancerDetection(); else arreterDetection();
+
+  if (mode === "reglages"){
+    principal.textContent = "Retour";
+  } else if (mode === "panneau"){
     principal.textContent = "Ouvrir la caisse";
     second.textContent = "Annuler";
     second.hidden = !caisse;          // rien à annuler s'il n'y a pas de caisse
@@ -214,6 +224,167 @@ function montrerTampon({ classe, cadre, quoi, ou }){
 function annoncer(texte, alerte = false){
   $("hint").textContent = texte;
   $("hint").classList.toggle("alerte", alerte);
+}
+
+// ---------------------------------------------------------------------------
+// Détection des contours — hors périmètre L1, coupable d'un réglage.
+//
+// Elle ne bloque jamais : le cadre fixe reste le comportement par défaut et le
+// repli. Un échec ne produit ni attente, ni message, ni geste supplémentaire.
+// ---------------------------------------------------------------------------
+
+const CLE_REGLAGES = "dvd-stock-reglages";
+const CLE_MESURES = "dvd-stock-mesures";
+const FRAICHEUR_MS = 800;   // au-delà, la dernière détection n'est plus fiable
+
+let detectionActive = true;
+let mesures = { tentatives: 0, redressees: 0, replis: 0, temps: [] };
+let derniereDetection = null;
+let minuterieDetection = null;
+
+function lireLocal(cle, defaut){
+  try {
+    const brut = localStorage.getItem(cle);
+    return brut ? { ...defaut, ...JSON.parse(brut) } : defaut;
+  } catch(e){ return defaut; }
+}
+function ecrireLocal(cle, valeur){
+  try { localStorage.setItem(cle, JSON.stringify(valeur)); } catch(e){ /* stockage refusé */ }
+}
+
+function chargerReglages(){
+  detectionActive = lireLocal(CLE_REGLAGES, { detection: true }).detection !== false;
+  mesures = lireLocal(CLE_MESURES, { tentatives: 0, redressees: 0, replis: 0, temps: [] });
+  if (!Array.isArray(mesures.temps)) mesures.temps = [];
+}
+
+function lancerDetection(){
+  arreterDetection();
+  if (!detectionActive) return;
+  const tour = () => {
+    if (mode !== "jaquette" && mode !== "reprise") return;
+    const trouve = detecter($("video"));
+    derniereDetection = trouve ? { ...trouve, quand: performance.now() } : null;
+    dessinerContours(trouve);
+    minuterieDetection = setTimeout(tour, 180);
+  };
+  minuterieDetection = setTimeout(tour, 60);
+}
+
+function arreterDetection(){
+  clearTimeout(minuterieDetection);
+  minuterieDetection = null;
+  derniereDetection = null;
+  const calque = $("calque-contours");
+  calque.hidden = true;
+  calque.getContext("2d")?.clearRect(0, 0, calque.width, calque.height);
+}
+
+/** Les coordonnées normalisées de la détection, dans le repère de l'écran. */
+function versEcran(p, video, boite){
+  const echelle = Math.max(boite.width / video.videoWidth, boite.height / video.videoHeight);
+  return {
+    x: (boite.width - video.videoWidth * echelle) / 2 + p.x * video.videoWidth * echelle,
+    y: (boite.height - video.videoHeight * echelle) / 2 + p.y * video.videoHeight * echelle,
+  };
+}
+
+function dessinerContours(trouve){
+  const calque = $("calque-contours"), video = $("video");
+  const boite = $("viseur").getBoundingClientRect();
+  const ratio = window.devicePixelRatio || 1;
+  calque.width = Math.round(boite.width * ratio);
+  calque.height = Math.round(boite.height * ratio);
+  const ctx = calque.getContext("2d");
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  ctx.clearRect(0, 0, boite.width, boite.height);
+
+  // Sans contour détecté, c'est le cadre fixe qui commande, et lui seul.
+  if (!trouve){
+    calque.hidden = true;
+    $("cadre-photo").hidden = false;
+    return;
+  }
+
+  // Un contour est trouvé : c'est LUI qui sera pris. Le cadre fixe s'efface,
+  // sinon l'écran montrerait deux zones différentes dont une seule compte.
+  calque.hidden = false;
+  $("cadre-photo").hidden = true;
+
+  const points = trouve.coins.map(p => versEcran(p, video, boite));
+  const tracerQuad = () => {
+    ctx.moveTo(points[0].x, points[0].y);
+    for (let i = 1; i < 4; i++) ctx.lineTo(points[i].x, points[i].y);
+    ctx.closePath();
+  };
+
+  // Assombrit tout ce qui ne sera pas enregistré : le rectangle plein, moins
+  // le quadrilatère, par la règle pair-impair.
+  ctx.beginPath();
+  ctx.rect(0, 0, boite.width, boite.height);
+  tracerQuad();
+  ctx.fillStyle = "rgba(10,24,23,.6)";
+  ctx.fill("evenodd");
+
+  ctx.beginPath();
+  tracerQuad();
+  ctx.strokeStyle = "#5FD39B";
+  ctx.lineWidth = 3;
+  ctx.stroke();
+  for (const p of points){
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 6, 0, Math.PI * 2);
+    ctx.fillStyle = "#5FD39B";
+    ctx.fill();
+  }
+}
+
+/** Les coins à utiliser pour la prochaine capture, ou null pour le cadre fixe. */
+function coinsPourCapture(){
+  if (!detectionActive) return null;
+  if (derniereDetection && performance.now() - derniereDetection.quand < FRAICHEUR_MS){
+    return derniereDetection;
+  }
+  return detecter($("video"));   // une dernière tentative, bornée par son budget
+}
+
+function enregistrerMesure(trouve, photo){
+  if (!detectionActive) return;
+  mesures.tentatives++;
+  if (photo.redressee) mesures.redressees++; else mesures.replis++;
+  if (trouve?.ms != null){
+    mesures.temps.push(trouve.ms);
+    if (mesures.temps.length > 200) mesures.temps = mesures.temps.slice(-200);
+  }
+  ecrireLocal(CLE_MESURES, mesures);
+}
+
+function texteMesures(){
+  if (!mesures.tentatives) return "Aucune photo prise depuis la remise à zéro.";
+  const taux = Math.round((mesures.redressees / mesures.tentatives) * 100);
+  const tries = [...mesures.temps].sort((a, b) => a - b);
+  const mediane = tries.length ? tries[tries.length >> 1] : null;
+  const pire = tries.length ? tries[tries.length - 1] : null;
+  return `Jaquettes redressées : <b>${mesures.redressees}</b> sur <b>${mesures.tentatives}</b> — <b>${taux} %</b><br>
+    Repli sur le cadre fixe : <b>${mesures.replis}</b><br>
+    <span class="sobre">Temps de détection — médiane <b>${mediane ?? "—"} ms</b>, maximum <b>${pire ?? "—"} ms</b></span>`;
+}
+
+function ouvrirReglages(){
+  nettoyerListe();
+  mode = "reglages";
+  enAttente = null;
+  $("reglages").hidden = false;
+  $("r-detection").checked = detectionActive;
+  $("mesures").innerHTML = texteMesures();
+  majBoutons();
+}
+
+function fermerReglages(){
+  $("reglages").hidden = true;
+  mode = "attente";
+  majBoutons();
+  annoncer(caisse ? "Présentez le code-barres" : "Ouvrez une caisse pour commencer");
 }
 
 // ---------------------------------------------------------------------------
@@ -325,6 +496,7 @@ function nettoyerListe(){
   $("feuille").hidden = true;
   ficheChoisie = null;
   $("liste").hidden = true;
+  $("reglages").hidden = true;
 }
 
 // ---------------------------------------------------------------------------
@@ -585,7 +757,9 @@ async function photographier(){
   if (!enAttente) return;
   const ean = enAttente.ean;
   try {
-    const photo = await capturer($("video"));
+    const trouve = coinsPourCapture();
+    const photo = await capturer($("video"), { coins: trouve?.coins ?? null });
+    enregistrerMesure(trouve, photo);
     const cle = await store.enregistrerPhoto(photo);
 
     if (urlVignette) URL.revokeObjectURL(urlVignette);
@@ -652,7 +826,9 @@ async function terminerReprisePhoto(){
   if (!fiche) return;
   const emp = `${fiche.caisse}-${String(fiche.position).padStart(3, "0")}`;
   try {
-    const photo = await capturer($("video"));
+    const trouve = coinsPourCapture();
+    const photo = await capturer($("video"), { coins: trouve?.coins ?? null });
+    enregistrerMesure(trouve, photo);
     await store.remplacerPhoto(fiche.id, photo);
     if (urlVignette) URL.revokeObjectURL(urlVignette);
     urlVignette = urlDeLaPhoto(photo);
@@ -786,7 +962,7 @@ async function importer(fichiers){
 // Scanner — caméra allumée pendant toute la session, jamais relancée.
 // ---------------------------------------------------------------------------
 
-const scanner = creerScanner({
+scanner = creerScanner({
   video: $("video"),
 
   surEtat(texte, verrouille){
@@ -820,7 +996,8 @@ const scanner = creerScanner({
 // ---------------------------------------------------------------------------
 
 $("btn").addEventListener("click", () => {
-  if (mode === "panneau") creerCaisse();
+  if (mode === "reglages") fermerReglages();
+  else if (mode === "panneau") creerCaisse();
   else if (mode === "jaquette") photographier();
   else if (mode === "reprise") terminerReprisePhoto();
   else if (mode === "liste") fermerListe();
@@ -850,6 +1027,22 @@ $("b-lampe").addEventListener("click", async () => {
   $("b-lampe").classList.toggle("active", await scanner.basculerTorche());
 });
 
+$("b-reglages").addEventListener("click", () => {
+  if (mode === "reglages") fermerReglages(); else ouvrirReglages();
+});
+
+$("r-detection").addEventListener("change", ev => {
+  detectionActive = ev.target.checked;
+  ecrireLocal(CLE_REGLAGES, { detection: detectionActive });
+  if (!detectionActive) arreterDetection();
+});
+
+$("r-remise-a-zero").addEventListener("click", () => {
+  mesures = { tentatives: 0, redressees: 0, replis: 0, temps: [] };
+  ecrireLocal(CLE_MESURES, mesures);
+  $("mesures").innerHTML = texteMesures();
+});
+
 $("f-photo").addEventListener("click", () => demarrerReprisePhoto());
 $("f-moins").addEventListener("click", () => changerQuantite(-1));
 $("f-plus").addEventListener("click", () => changerQuantite(+1));
@@ -864,6 +1057,8 @@ if ("serviceWorker" in navigator){
 }
 
 chargerDecodeur().catch(e => annoncer("Décodeur indisponible — " + e.message, true));
+
+chargerReglages();
 
 (async () => {
   caisse = await store.caisseCourante();

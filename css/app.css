@@ -129,6 +129,33 @@ body{
 .cadre-photo span:nth-child(3){bottom:-3px;left:-3px;border-right:0;border-top:0}
 .cadre-photo span:nth-child(4){bottom:-3px;right:-3px;border-left:0;border-top:0}
 
+.calque-contours{position:absolute;inset:0;pointer-events:none;width:100%;height:100%}
+
+.engrenage{
+  background:none;border:0;color:#9FB5AF;cursor:pointer;
+  font-size:16px;line-height:1;padding:0 0 0 4px;
+}
+.engrenage:active{color:var(--card)}
+
+/* réglages */
+.bascule{
+  display:flex;align-items:flex-start;gap:14px;
+  padding:14px 15px;background:var(--card);
+  border-bottom:1px solid var(--line);cursor:pointer;
+}
+.bascule span{flex:1}
+.bascule b{display:block;font-size:16px;font-weight:600}
+.bascule small{display:block;font-size:13.5px;color:var(--mute);margin-top:3px;line-height:1.4}
+.bascule input{width:26px;height:26px;flex-shrink:0;accent-color:var(--valid)}
+.mesures{
+  padding:14px 15px;background:var(--card);
+  border-bottom:1px solid var(--line);
+  font-size:14px;line-height:1.7;
+}
+.mesures b{font-family:var(--mono);font-weight:500;font-size:16px}
+.mesures .sobre{color:var(--mute)}
+#r-remise-a-zero{margin:14px 15px;width:auto}
+
 /* La lampe est une commande de caméra : sa place est dans le viseur,
    pas dans la barre d'action où elle disputait la place aux actions. */
 .lampe{

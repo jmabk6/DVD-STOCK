@@ -20,6 +20,7 @@
     <span class="caisse" id="caisse">—</span>
     <span class="etat-caisse" id="etat-caisse">aucune caisse ouverte</span>
     <span class="compte" id="compte">0</span>
+    <button class="engrenage" id="b-reglages" aria-label="Réglages">⚙</button>
   </div>
 
   <!-- Viseur et fiche. La liste vient recouvrir ce bloc, sans masquer ni le
@@ -34,6 +35,9 @@
     <div class="cadre-photo" id="cadre-photo" hidden>
       <span></span><span></span><span></span><span></span>
     </div>
+    <!-- Contours détectés, dessinés en direct. Rien à valider : c'est un
+         aperçu de ce qui sera pris, pas une demande de confirmation. -->
+    <canvas class="calque-contours" id="calque-contours" hidden></canvas>
     <button class="lampe" id="b-lampe" hidden aria-label="Lampe">☀</button>
     <div class="hint" id="hint">Initialisation…</div>
   </div>
@@ -84,6 +88,23 @@
         <button id="f-plus" aria-label="Augmenter">+</button>
       </div>
       <button class="btn discret" id="f-fermer">Fermer</button>
+    </div>
+  </div>
+
+  <!-- Réglages et mesures. La détection de contours doit pouvoir être coupée
+       ici, sans redéploiement. -->
+  <div class="liste" id="reglages" hidden>
+    <div class="liste-tete">Réglages et mesures</div>
+    <div class="liste-corps">
+      <label class="bascule">
+        <span>
+          <b>Détection des contours</b>
+          <small>Redresse la jaquette par perspective. En cas d'échec, le cadre fixe est utilisé, sans attente.</small>
+        </span>
+        <input type="checkbox" id="r-detection">
+      </label>
+      <div class="mesures" id="mesures">…</div>
+      <button class="btn discret" id="r-remise-a-zero">Remettre les mesures à zéro</button>
     </div>
   </div>
 
