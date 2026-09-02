@@ -198,13 +198,37 @@ async function transaction(magasins, mode, travail){
 
 const copie = valeur => structuredClone(valeur);
 
+const FORMAT_EXPORT = "dvd-stock";
+
+// Les jaquettes voyagent en base64 dans l'export. Tant que L2 n'existe pas,
+// l'export est la seule sauvegarde : les perdre obligerait à ressortir chaque
+// boîtier des cartons pour les refaire, ce qui n'est pas plus réaliste que de
+// tout ressaisir. Le « lourdes et reproductibles » de la SPEC §2 vise le
+// régime normal, pas une sauvegarde unique.
+function enBase64(tampon){
+  const vue = new Uint8Array(tampon);
+  const PAS = 0x8000;                       // par tranches : éviter un dépassement de pile
+  let binaire = "";
+  for (let i = 0; i < vue.length; i += PAS){
+    binaire += String.fromCharCode.apply(null, vue.subarray(i, i + PAS));
+  }
+  return btoa(binaire);
+}
+
+function depuisBase64(texte){
+  const binaire = atob(texte);
+  const vue = new Uint8Array(binaire.length);
+  for (let i = 0; i < binaire.length; i++) vue[i] = binaire.charCodeAt(i);
+  return vue;
+}
+
 async function lireMeta(magasin, cle, defaut){
   const enregistrement = await promesse(magasin.get(cle));
   return enregistrement === undefined ? defaut : enregistrement.valeur;
 }
 
 // ---------------------------------------------------------------------------
-// API publique — quatorze fonctions, et la constante LARGEUR_PHOTO dont photo.js
+// API publique — quinze fonctions, et la constante LARGEUR_PHOTO dont photo.js
 // a besoin pour réduire au bon format. Rien d'autre.
 // ---------------------------------------------------------------------------
 
@@ -507,23 +531,124 @@ export async function lirePhoto(cle){
 
 /**
  * L'intégralité des données, prête à être écrite dans un fichier JSON.
- * Les jaquettes en sont exclues : elles sont lourdes et reproductibles, les
- * fiches sont irremplaçables (SPEC §2). Un export reste un fichier de texte.
+ *
+ * `avecPhotos` embarque les jaquettes en base64 — c'est ce qu'il faut pour une
+ * vraie sauvegarde. `caisse` limite les fiches à une seule caisse, pour
+ * découper un export devenu trop lourd pour la mémoire d'un téléphone. Les
+ * caisses et la méta sont toujours entières : chaque morceau reste
+ * réimportable seul.
  */
-export async function exporterTout(){
-  return transaction(["disques", "caisses", "meta"], "readonly", async magasin => {
-    const disques = (await promesse(magasin("disques").getAll())).map(validerDisque);
+export async function exporterTout({ avecPhotos = false, caisse = null } = {}){
+  const paquet = await transaction(["disques", "caisses", "meta"], "readonly", async magasin => {
+    let disques = (await promesse(magasin("disques").getAll())).map(validerDisque);
     const caisses = (await promesse(magasin("caisses").getAll())).map(validerCaisse);
     const meta = await promesse(magasin("meta").getAll());
+    if (caisse !== null) disques = disques.filter(d => d.caisse === caisse);
     disques.sort((a, b) => a.caisse.localeCompare(b.caisse) || a.position - b.position);
     caisses.sort((a, b) => a.code.localeCompare(b.code));
-    return copie({
-      format: "dvd-stock",
+    return {
+      format: FORMAT_EXPORT,
       versionSchema: VERSION_SCHEMA,
       dateExport: Date.now(),
+      caisse,
       caisses,
       disques,
       meta,
+    };
+  });
+
+  if (!avecPhotos) return paquet;
+
+  // Lues une par une : tenir toute la bibliothèque de blobs en mémoire en
+  // même temps est précisément ce qui fait échouer un export sur iPhone.
+  const photos = [];
+  for (const d of paquet.disques){
+    if (!d.photoCle) continue;
+    const photo = await lirePhoto(d.photoCle);
+    if (!photo) continue;
+    photos.push({
+      cle: photo.cle,
+      largeur: photo.largeur,
+      hauteur: photo.hauteur,
+      octets: photo.octets,
+      dateSaisie: photo.dateSaisie,
+      type: photo.donnees.type || "image/jpeg",
+      donnees: enBase64(await photo.donnees.arrayBuffer()),
     });
+  }
+  return { ...paquet, photos };
+}
+
+/**
+ * Réimporte un export. Additif et idempotent : une fiche dont l'identifiant
+ * existe déjà est laissée telle quelle, jamais écrasée. C'est ce qui permet de
+ * réimporter plusieurs morceaux d'un export découpé, et de rejouer le même
+ * fichier deux fois sans dégât.
+ *
+ * Rien n'est écrit avant que tout ait été validé : un fichier corrompu ne
+ * laisse pas la base à moitié restaurée.
+ */
+export async function importerTout(donnees){
+  if (donnees?.format !== FORMAT_EXPORT)
+    throw new ErreurInvariant("I-12", `format inconnu : ${JSON.stringify(donnees?.format)}`);
+  if (!Array.isArray(donnees.disques) || !Array.isArray(donnees.caisses))
+    throw new ErreurInvariant("I-12", "export incomplet : disques ou caisses manquants");
+
+  const caisses = donnees.caisses.map(validerCaisse);
+  const disques = donnees.disques.map(validerDisque);
+  const photos = (donnees.photos ?? []).map(p => validerPhoto({
+    cle: p?.cle,
+    largeur: p?.largeur,
+    hauteur: p?.hauteur,
+    octets: p?.octets,
+    dateSaisie: p?.dateSaisie,
+    donnees: new Blob([depuisBase64(p?.donnees ?? "")], { type: p?.type || "image/jpeg" }),
+  }));
+
+  const bilan = {
+    caisses: { ajoutees: 0, fusionnees: 0 },
+    disques: { ajoutees: 0, ignorees: 0 },
+    photos:  { ajoutees: 0, ignorees: 0 },
+  };
+
+  return transaction(["disques", "caisses", "meta", "photos"], "readwrite", async magasin => {
+    const C = magasin("caisses"), D = magasin("disques"), P = magasin("photos"), M = magasin("meta");
+
+    for (const c of caisses){
+      const existante = await promesse(C.get(c.code));
+      if (existante === undefined){
+        await promesse(C.add(c));
+        bilan.caisses.ajoutees++;
+      } else {
+        // I-2 : ni la numérotation ni la capacité ne redescendent.
+        validerCaisse(existante);
+        await promesse(C.put(verifierProgression(existante, {
+          ...existante,
+          prochainePosition: Math.max(existante.prochainePosition, c.prochainePosition),
+          capacite: Math.max(existante.capacite, c.capacite),
+        })));
+        bilan.caisses.fusionnees++;
+      }
+    }
+
+    for (const p of photos){
+      if (await promesse(P.get(p.cle)) !== undefined){ bilan.photos.ignorees++; continue; }
+      await promesse(P.add(p));
+      bilan.photos.ajoutees++;
+    }
+
+    for (const d of disques){
+      if (await promesse(D.get(d.id)) !== undefined){ bilan.disques.ignorees++; continue; }
+      await promesse(D.add(d));
+      bilan.disques.ajoutees++;
+    }
+
+    for (const m of donnees.meta ?? []){
+      if (m?.cle !== "prochainCodeCaisse" || !Number.isInteger(m.valeur)) continue;
+      const actuel = await lireMeta(M, "prochainCodeCaisse", 1);
+      await promesse(M.put({ cle: "prochainCodeCaisse", valeur: Math.max(actuel, m.valeur) }));
+    }
+
+    return bilan;
   });
 }

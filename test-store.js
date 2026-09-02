@@ -437,9 +437,9 @@ async function testI12(){
   const api = Object.keys(store).filter(n => typeof store[n] === "function").sort();
   egal(api, ["ajouterDisque", "caisseCourante", "chercherParEan", "compterSession",
              "corrigerQuantite", "enregistrerPhoto", "exporterTout", "fermerCaisse",
-             "lirePhoto", "listerCaisses", "listerDisques", "ouvrirCaisse",
+             "importerTout", "lirePhoto", "listerCaisses", "listerDisques", "ouvrirCaisse",
              "remplacerPhoto", "rouvrirCaisse"],
-    "I-12 : l'API est exactement les quatorze fonctions prévues");
+    "I-12 : l'API est exactement les quinze fonctions prévues");
   verifier(!api.some(n => /suppr|efface|retire|delete|remove/i.test(n)),
     "I-12 : aucune fonction de suppression exposée");
 
@@ -522,10 +522,121 @@ async function testI11(){
   egal(await store.lirePhoto("inconnue"), null, "I-11 : une clé inconnue rend null");
   egal(await store.lirePhoto(null), null, "I-11 : une clé nulle rend null");
 
-  // Les jaquettes ne partent pas dans l'export : lourdes et reproductibles.
-  const tout = await store.exporterTout();
-  verifier(!("photos" in tout), "I-11 : l'export ne contient pas les jaquettes");
-  verifier(JSON.stringify(tout).length < 20_000, "I-11 : l'export reste un fichier de texte");
+  // Sans jaquettes, l'export reste un fichier de texte léger.
+  const leger = await store.exporterTout();
+  verifier(!("photos" in leger), "I-11 : sans avecPhotos, l'export ne porte pas les images");
+  verifier(JSON.stringify(leger).length < 20_000, "I-11 : l'export léger reste petit");
+}
+
+// ===========================================================================
+// Export et réimport — le cycle complet.
+// Tant que L2 n'existe pas, l'export est la seule sauvegarde : il doit rendre
+// les fiches ET les jaquettes, à l'octet près.
+// ===========================================================================
+async function testCycleExport(){
+  const source = await storeNeuf();
+  const image = (n, octet) => new Blob([new Uint8Array(n).fill(octet)], { type: "image/jpeg" });
+
+  await source.store.ouvrirCaisse(4);
+  const attendus = [];
+  for (const [i, ean] of [EAN_A, EAN_B, null, EAN_C].entries()){
+    const cle = await source.store.enregistrerPhoto({ donnees: image(1000 + i, 65 + i), largeur: 400, hauteur: 225 });
+    const { disque } = await source.store.ajouterDisque({ ean, photoCle: cle });
+    attendus.push(disque);
+  }
+  await source.store.ajouterDisque({ ean: EAN_A });          // un doublon : quantité 2
+  await source.store.fermerCaisse("C01");
+  await source.store.ouvrirCaisse(6);
+  const { disque: enC02 } = await source.store.ajouterDisque({ ean: "3701432012919" });
+
+  // --- export complet ---
+  const paquet = await source.store.exporterTout({ avecPhotos: true });
+  egal(paquet.format, "dvd-stock", "export : format marqué");
+  egal(paquet.disques.length, 5, "export : cinq fiches");
+  egal(paquet.caisses.length, 2, "export : deux caisses");
+  egal(paquet.photos.length, 4, "export : quatre jaquettes");
+  verifier(paquet.photos.every(p => typeof p.donnees === "string" && p.donnees.length > 0),
+    "export : les jaquettes sont encodées en base64");
+  verifier(JSON.parse(JSON.stringify(paquet)).photos.length === 4,
+    "export : le paquet survit à un aller-retour JSON");
+
+  // --- réimport dans une base vierge, comme après une réinstallation ---
+  const cible = await storeNeuf();
+  egal((await cible.store.listerDisques()).length, 0, "réimport : la base cible est vide");
+
+  const bilan = await cible.store.importerTout(JSON.parse(JSON.stringify(paquet)));
+  egal([bilan.disques.ajoutees, bilan.disques.ignorees], [5, 0], "réimport : cinq fiches ajoutées");
+  egal([bilan.photos.ajoutees, bilan.photos.ignorees], [4, 0], "réimport : quatre jaquettes ajoutées");
+  egal([bilan.caisses.ajoutees, bilan.caisses.fusionnees], [2, 0], "réimport : deux caisses ajoutées");
+
+  // Les fiches sont intactes, emplacements compris.
+  const avant = await source.store.listerDisques();
+  const apres = await cible.store.listerDisques();
+  egal(apres.length, avant.length, "réimport : même nombre de fiches");
+  egal(apres.map(d => d.caisse + "-" + d.position), avant.map(d => d.caisse + "-" + d.position),
+    "réimport : les emplacements sont identiques");
+  egal(apres.map(d => [d.id, d.ean, d.quantite]), avant.map(d => [d.id, d.ean, d.quantite]),
+    "réimport : identifiants, EAN et quantités identiques");
+  egal(apres.map(d => d.dateSaisie), avant.map(d => d.dateSaisie), "réimport : dates de saisie identiques");
+
+  // Les jaquettes sont restituées à l'octet près.
+  let comparees = 0;
+  for (const d of apres.filter(d => d.photoCle)){
+    const origine = await source.store.lirePhoto(d.photoCle);
+    const copiee = await cible.store.lirePhoto(d.photoCle);
+    const a = new Uint8Array(await origine.donnees.arrayBuffer());
+    const b = new Uint8Array(await copiee.donnees.arrayBuffer());
+    if (!verifier(a.length === b.length && a.every((o, i) => o === b[i]),
+      `réimport : la jaquette ${d.caisse}-${d.position} est identique à l'octet près`)) break;
+    egal([copiee.largeur, copiee.hauteur, copiee.octets], [origine.largeur, origine.hauteur, origine.octets],
+      `réimport : dimensions et poids de ${d.caisse}-${d.position}`);
+    comparees++;
+  }
+  egal(comparees, 4, "réimport : les quatre jaquettes ont été comparées");
+
+  // La numérotation reprend au bon endroit : on n'écrase pas ce qui existe.
+  const c02 = (await cible.store.listerCaisses()).find(c => c.code === "C02");
+  egal(c02.prochainePosition, 2, "réimport : la numérotation de C02 est restaurée");
+  const suivant = await cible.store.ajouterDisque({ ean: "5053083236434" });
+  egal(suivant.disque.caisse + "-" + String(suivant.disque.position).padStart(3, "0"), "C02-002",
+    "réimport : le disque suivant ne réutilise aucune position");
+  egal((await cible.store.ouvrirCaisse(3)).code, "C03",
+    "réimport : le compteur de codes de caisse est restauré");
+
+  // --- rejouer le même fichier ne duplique rien ---
+  const rejeu = await cible.store.importerTout(JSON.parse(JSON.stringify(paquet)));
+  egal([rejeu.disques.ajoutees, rejeu.disques.ignorees], [0, 5], "réimport : rejouer le même export n'ajoute rien");
+  egal([rejeu.photos.ajoutees, rejeu.photos.ignorees], [0, 4], "réimport : ni jaquette en double");
+  egal((await cible.store.listerDisques()).length, 6, "réimport : aucune fiche dupliquée");
+
+  // --- export découpé par caisse, puis réimport morceau par morceau ---
+  const morceaux = [];
+  for (const c of await source.store.listerCaisses()){
+    morceaux.push(await source.store.exporterTout({ avecPhotos: true, caisse: c.code }));
+  }
+  egal(morceaux.map(m => m.disques.length), [4, 1], "découpage : les fiches sont réparties par caisse");
+  verifier(morceaux.every(m => m.caisses.length === 2),
+    "découpage : chaque morceau porte toutes les caisses, donc reste réimportable seul");
+  egal(morceaux.map(m => m.photos.length), [4, 0], "découpage : les jaquettes suivent leur caisse");
+
+  const morcelee = await storeNeuf();
+  for (const m of morceaux) await morcelee.store.importerTout(JSON.parse(JSON.stringify(m)));
+  egal((await morcelee.store.listerDisques()).map(d => d.caisse + "-" + d.position),
+       avant.map(d => d.caisse + "-" + d.position),
+    "découpage : un export en deux morceaux restaure les mêmes emplacements");
+  let jaquettes = 0;
+  for (const d of await morcelee.store.listerDisques()) if (d.photoCle && await morcelee.store.lirePhoto(d.photoCle)) jaquettes++;
+  egal(jaquettes, 4, "découpage : les quatre jaquettes sont revenues");
+
+  // --- un fichier qui n'en est pas un ---
+  const vierge = await storeNeuf();
+  await leve("I-12", () => vierge.store.importerTout({ format: "autre-chose" }), "réimport : format inconnu refusé");
+  await leve("I-12", () => vierge.store.importerTout(null), "réimport : contenu vide refusé");
+  await leve("I-12", () => vierge.store.importerTout({ format: "dvd-stock" }), "réimport : export incomplet refusé");
+  await leve("I-1", () => vierge.store.importerTout({ format: "dvd-stock", caisses: [], disques: [{ id: "x", ean: null }] }),
+    "réimport : une fiche invalide est refusée");
+  egal((await vierge.store.listerDisques()).length, 0,
+    "réimport : un fichier corrompu ne laisse pas la base à moitié restaurée");
 }
 
 // ===========================================================================
@@ -662,6 +773,7 @@ const suites = [
   ["     corrections jaquette et quantité", testCorrections],
   ["I-12 aucune suppression", testI12],
   ["      caisses et emplacements", testCaisses],
+  ["      export et réimport", testCycleExport],
   ["API  contrôles complémentaires", testApi],
 ];
 

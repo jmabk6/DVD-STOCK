@@ -134,6 +134,8 @@ function majBoutons(){
     principal.textContent = "Retour à la saisie";
     second.textContent = "Exporter";
     second.hidden = false;
+    tiers.textContent = "Importer";
+    tiers.hidden = false;
   } else {
     principal.textContent = "Sans code-barres";
     second.textContent = "Liste";
@@ -191,7 +193,6 @@ function annoncer(texte, alerte = false){
 
 const PIXEL_VIDE = "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
 
-let observateurVignettes = null;
 const urlsListe = [];
 
 const dateCourte = t => new Date(t).toLocaleDateString("fr-FR",
@@ -244,25 +245,51 @@ async function ouvrirListe(){
   }
   corps.appendChild(fragment);
 
-  // Les jaquettes ne sont lues qu'à l'approche de l'écran : trois mille fiches
-  // ne peuvent pas tenir trois mille blobs ouverts en même temps.
-  observateurVignettes = new IntersectionObserver(async entrees => {
-    for (const e of entrees){
-      if (!e.isIntersecting) continue;
-      observateurVignettes.unobserve(e.target);
-      const photo = await store.lirePhoto(e.target.dataset.cle);
-      if (!photo) continue;
+  corps.addEventListener("scroll", surDefilement);
+  chargerVignettesVisibles();
+}
+
+// Les jaquettes ne sont lues qu'à l'approche de l'écran : trois mille fiches
+// ne peuvent pas tenir trois mille blobs ouverts en même temps.
+//
+// Calculé, pas observé. Un IntersectionObserver dépend du cycle de rendu, et
+// ne livre rien quand la page n'est pas rendue — la liste resterait alors une
+// colonne de cadres vides, sans le moindre message.
+const MARGE_VIGNETTES = 300;   // px chargés au-delà de l'écran, de part et d'autre
+
+function chargerVignettesVisibles(){
+  const corps = $("liste-corps");
+  const zone = corps.getBoundingClientRect();
+  // Seules les images pas encore chargées portent encore data-cle : le balayage
+  // se réduit au fil du défilement.
+  for (const img of corps.querySelectorAll("img.vignette[data-cle]")){
+    const boite = img.getBoundingClientRect();
+    if (boite.bottom < zone.top - MARGE_VIGNETTES) continue;
+    if (boite.top > zone.bottom + MARGE_VIGNETTES) break;   // la suite est plus bas encore
+    const cle = img.dataset.cle;
+    delete img.dataset.cle;                                 // une seule lecture par image
+    store.lirePhoto(cle).then(photo => {
+      if (!photo) return;
       const url = URL.createObjectURL(photo.donnees);
       urlsListe.push(url);
-      e.target.src = url;
-    }
-  }, { root: corps, rootMargin: "300px" });
-  corps.querySelectorAll("img.vignette[data-cle]").forEach(i => observateurVignettes.observe(i));
+      img.src = url;
+    }).catch(() => { /* jaquette illisible : le cadre reste vide */ });
+  }
+}
+
+let defilementEnAttente = null;
+function surDefilement(){
+  if (defilementEnAttente) return;
+  defilementEnAttente = setTimeout(() => {
+    defilementEnAttente = null;
+    chargerVignettesVisibles();
+  }, 120);
 }
 
 function nettoyerListe(){
-  observateurVignettes?.disconnect();
-  observateurVignettes = null;
+  clearTimeout(defilementEnAttente);
+  defilementEnAttente = null;
+  $("liste-corps").removeEventListener("scroll", surDefilement);
   while (urlsListe.length) URL.revokeObjectURL(urlsListe.pop());
   $("liste-corps").innerHTML = "";
   $("feuille").hidden = true;
@@ -628,35 +655,100 @@ function annulerReprisePhoto(){
 // Export — la seule sauvegarde disponible tant que L2 n'existe pas.
 // ---------------------------------------------------------------------------
 
-async function exporter(){
-  try {
-    const donnees = await store.exporterTout();
-    const texte = JSON.stringify(donnees, null, 2);
-    const nom = `dvd-stock-${new Date().toISOString().slice(0, 10)}.json`;
-    const blob = new Blob([texte], { type: "application/json" });
+// Au-delà de ce nombre de fiches, un export d'un seul tenant risque de manquer
+// de mémoire sur un iPhone : les jaquettes en base64 pèsent un tiers de plus
+// que les images. On découpe par caisse plutôt que de ne rien produire.
+const SEUIL_DECOUPAGE = 800;
 
-    // Sur iPhone, un lien de téléchargement dans une PWA installée ne mène
-    // nulle part : la feuille de partage est le seul chemin fiable.
-    const fichier = new File([blob], nom, { type: "application/json" });
-    if (navigator.canShare?.({ files: [fichier] })){
-      try {
-        await navigator.share({ files: [fichier], title: nom });
-        annoncer(`${donnees.disques.length} fiches exportées`);
-        return;
-      } catch (e){
-        if (e?.name === "AbortError") return;   // partage annulé : ce n'est pas une erreur
-      }
+const nomExport = code =>
+  `dvd-stock-${new Date().toISOString().slice(0, 10)}${code ? "-" + code : ""}.json`;
+
+async function fichierExport(code){
+  const donnees = await store.exporterTout({ avecPhotos: true, caisse: code });
+  // Pas d'indentation : avec les jaquettes en base64, elle coûte cher pour rien.
+  return {
+    fichier: new File([JSON.stringify(donnees)], nomExport(code), { type: "application/json" }),
+    fiches: donnees.disques.length,
+    jaquettes: donnees.photos.length,
+  };
+}
+
+/** Feuille de partage d'abord — sur iPhone, un lien de téléchargement dans une
+ *  PWA installée ne mène nulle part. Repli sur le lien ailleurs. */
+async function livrer(fichiers){
+  if (navigator.canShare?.({ files: fichiers })){
+    try {
+      await navigator.share({ files: fichiers, title: "Sauvegarde DVD" });
+      return true;
+    } catch (e){
+      if (e?.name === "AbortError") return false;   // partage annulé : pas une erreur
     }
-    const url = URL.createObjectURL(blob);
+  }
+  for (const f of fichiers){
+    const url = URL.createObjectURL(f);
     const lien = document.createElement("a");
     lien.href = url;
-    lien.download = nom;
+    lien.download = f.name;
     lien.click();
     setTimeout(() => URL.revokeObjectURL(url), 30_000);
-    annoncer(`${donnees.disques.length} fiches exportées`);
+    await new Promise(r => setTimeout(r, 300));
+  }
+  return true;
+}
+
+async function exporter(){
+  try {
+    annoncer("Préparation de la sauvegarde…");
+    const inventaire = await store.listerDisques();
+    const codes = [...new Set(inventaire.map(d => d.caisse))];
+
+    let morceaux = null;
+    if (inventaire.length <= SEUIL_DECOUPAGE || codes.length < 2){
+      try {
+        morceaux = [await fichierExport(null)];
+      } catch (e){
+        morceaux = null;   // mémoire insuffisante d'un seul tenant : on découpe
+      }
+    }
+    if (!morceaux){
+      morceaux = [];
+      for (const code of codes) morceaux.push(await fichierExport(code));
+    }
+
+    if (!await livrer(morceaux.map(m => m.fichier))) { annoncer("Sauvegarde annulée"); return; }
+
+    const fiches = morceaux.reduce((n, m) => n + m.fiches, 0);
+    const jaquettes = morceaux.reduce((n, m) => n + m.jaquettes, 0);
+    annoncer(morceaux.length > 1
+      ? `${fiches} fiches et ${jaquettes} jaquettes, en ${morceaux.length} fichiers`
+      : `${fiches} fiches et ${jaquettes} jaquettes sauvegardées`);
   } catch (e){
     signaler("echec");
-    annoncer("Export impossible — " + (e?.message ?? e), true);
+    annoncer("Sauvegarde impossible — " + (e?.message ?? e), true);
+  }
+}
+
+/** Réimport. Plusieurs fichiers à la fois : un export découpé se restaure d'un coup. */
+async function importer(fichiers){
+  const cumul = { ajoutees: 0, ignorees: 0, jaquettes: 0 };
+  try {
+    annoncer(`Lecture de ${fichiers.length} fichier${fichiers.length > 1 ? "s" : ""}…`);
+    for (const f of fichiers){
+      const bilan = await store.importerTout(JSON.parse(await f.text()));
+      cumul.ajoutees += bilan.disques.ajoutees;
+      cumul.ignorees += bilan.disques.ignorees;
+      cumul.jaquettes += bilan.photos.ajoutees;
+    }
+    caisse = await store.caisseCourante();
+    occupee = caisse ? (await store.listerDisques({ caisse: caisse.code })).length : 0;
+    majBandeau();
+    await ouvrirListe();
+    signaler("accepte");
+    annoncer(`${cumul.ajoutees} fiches et ${cumul.jaquettes} jaquettes restaurées`
+      + (cumul.ignorees ? ` · ${cumul.ignorees} déjà présentes` : ""));
+  } catch (e){
+    signaler("echec");
+    annoncer("Réimport impossible — " + (e?.message ?? e), true);
   }
 }
 
@@ -712,7 +804,16 @@ $("b-second").addEventListener("click", () => {
   ouvrirListe();
 });
 
-$("b-tiers").addEventListener("click", () => ouvrirPanneau());
+$("b-tiers").addEventListener("click", () => {
+  if (mode === "liste"){ $("fichier").click(); return; }
+  ouvrirPanneau();
+});
+
+$("fichier").addEventListener("change", async ev => {
+  const fichiers = [...ev.target.files];
+  ev.target.value = "";                    // pour pouvoir rejouer le même fichier
+  if (fichiers.length) await importer(fichiers);
+});
 
 $("b-lampe").addEventListener("click", async () => {
   $("b-lampe").classList.toggle("active", await scanner.basculerTorche());
