@@ -15,7 +15,7 @@
 // d'une seconde jaquette.
 
 import { creerScanner, chargerDecodeur } from "./scanner.js";
-import { capturer, urlDeLaPhoto } from "./photo.js";
+import { capturer, urlDeLaPhoto, zoneCapture } from "./photo.js";
 import * as store from "./store.js";
 
 const $ = id => document.getElementById(id);
@@ -112,11 +112,41 @@ function majBandeau(alerteCapacite = false){
   etat.classList.toggle("pleine", alerteCapacite || occupee >= caisse.capacite);
 }
 
+/**
+ * Place le cadre exactement sur la zone que `capturer` enregistrera.
+ * Même fonction des deux côtés : ce que le cadre entoure est ce qui est écrit.
+ */
+function ajusterCadrePhoto(){
+  const video = $("video"), viseur = $("viseur"), cadre = $("cadre-photo");
+  if (cadre.hidden || !video.videoWidth) return;
+  const boite = viseur.getBoundingClientRect();
+  // object-fit: cover — l'image est agrandie jusqu'à remplir le viseur, et
+  // centrée ; ce qui dépasse est rogné à gauche et à droite.
+  const echelle = Math.max(boite.width / video.videoWidth, boite.height / video.videoHeight);
+  const gauche = (boite.width - video.videoWidth * echelle) / 2;
+  const haut = (boite.height - video.videoHeight * echelle) / 2;
+  const zone = zoneCapture(video.videoWidth, video.videoHeight);
+  cadre.style.left = `${gauche + zone.x * echelle}px`;
+  cadre.style.top = `${haut + zone.y * echelle}px`;
+  cadre.style.width = `${zone.largeur * echelle}px`;
+  cadre.style.height = `${zone.hauteur * echelle}px`;
+}
+
+window.addEventListener("resize", ajusterCadrePhoto);
+window.addEventListener("orientationchange", () => setTimeout(ajusterCadrePhoto, 250));
+
 function majBoutons(){
   const principal = $("btn"), second = $("b-second"), tiers = $("b-tiers");
   second.hidden = true;
   tiers.hidden = true;
   $("b-lampe").hidden = !torcheDisponible || mode === "liste";
+
+  // Le viseur bascule en mode photo dès qu'une jaquette est attendue : image
+  // entière, cadre au format d'un boîtier, tout le reste assombri.
+  const enPhoto = mode === "jaquette" || mode === "reprise";
+  $("corps-ecran").classList.toggle("photo", enPhoto);
+  $("cadre-photo").hidden = !enPhoto;
+  if (enPhoto) ajusterCadrePhoto();
 
   if (mode === "panneau"){
     principal.textContent = "Ouvrir la caisse";
@@ -770,6 +800,7 @@ const scanner = creerScanner({
   surCamera({ torche }){
     torcheDisponible = torche;
     majBoutons();
+    ajusterCadrePhoto();   // les dimensions du flux sont connues
   },
 
   surCode(ean){

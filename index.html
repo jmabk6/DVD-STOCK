@@ -29,6 +29,11 @@
   <div class="viseur" id="viseur">
     <video id="video" playsinline muted autoplay></video>
     <div class="reticule"><span></span><span></span><span></span><span></span></div>
+    <!-- Cadre de la jaquette. Sa position est calculée à partir de la même
+         fonction que la capture : ce qu'il entoure est ce qui sera enregistré. -->
+    <div class="cadre-photo" id="cadre-photo" hidden>
+      <span></span><span></span><span></span><span></span>
+    </div>
     <button class="lampe" id="b-lampe" hidden aria-label="Lampe">☀</button>
     <div class="hint" id="hint">Initialisation…</div>
   </div>

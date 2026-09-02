@@ -105,6 +105,30 @@ body{
 .reticule span:nth-child(4){bottom:-3px;right:-3px;border-left:0;border-top:0}
 .viseur.verrouille .reticule{border-color:var(--valid)}
 .viseur.verrouille .reticule span{border-color:var(--valid)}
+/* Mode photo : le viseur s'agrandit, montre TOUTE l'image de la caméra
+   (contain, pas cover) et matérialise la zone qui sera enregistrée. Sans ça,
+   on déclenche sans voir le cadrage — et on obtient des images inexploitables. */
+/* Le viseur prend toute la place que la fiche ne réclame pas. Surtout pas de
+   `vh` : l'écran est plafonné à 896 px, une hauteur en vh le ferait déborder. */
+.corps-ecran.photo .viseur{flex:1 1 auto;height:auto;min-height:0;max-height:none}
+.corps-ecran.photo .fiche{flex:0 0 auto}
+/* On garde `cover` : l'image remplit le viseur, donc la zone du boîtier y est
+   grande et visable. Avec `contain`, une image 16/9 réduite à la largeur de
+   l'écran laisserait la bande verticale du boîtier au tiers de sa taille. */
+.corps-ecran.photo .reticule{display:none}
+
+.cadre-photo{
+  position:absolute;pointer-events:none;
+  border:2px solid var(--card);
+  /* Assombrit tout ce qui ne sera PAS enregistré. */
+  box-shadow:0 0 0 9999px rgba(10,24,23,.6);
+}
+.cadre-photo span{position:absolute;width:22px;height:22px;border:3px solid var(--card)}
+.cadre-photo span:nth-child(1){top:-3px;left:-3px;border-right:0;border-bottom:0}
+.cadre-photo span:nth-child(2){top:-3px;right:-3px;border-left:0;border-bottom:0}
+.cadre-photo span:nth-child(3){bottom:-3px;left:-3px;border-right:0;border-top:0}
+.cadre-photo span:nth-child(4){bottom:-3px;right:-3px;border-left:0;border-top:0}
+
 /* La lampe est une commande de caméra : sa place est dans le viseur,
    pas dans la barre d'action où elle disputait la place aux actions. */
 .lampe{
