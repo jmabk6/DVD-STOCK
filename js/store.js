@@ -145,7 +145,8 @@ function etatCapacite(caisse, occupee){
 
 // ---------------------------------------------------------------------------
 // IndexedDB — surface volontairement étroite : open, transaction, get, getAll,
-// add, put, et un index. Rien de plus, pour que L2 ait peu à remplacer.
+// add, put, un index, et `delete` sur le seul magasin `photos`. Rien de plus,
+// pour que L2 ait peu à remplacer.
 // ---------------------------------------------------------------------------
 
 let basePromesse = null;
@@ -203,7 +204,7 @@ async function lireMeta(magasin, cle, defaut){
 }
 
 // ---------------------------------------------------------------------------
-// API publique — douze fonctions, et la constante LARGEUR_PHOTO dont photo.js
+// API publique — quatorze fonctions, et la constante LARGEUR_PHOTO dont photo.js
 // a besoin pour réduire au bon format. Rien d'autre.
 // ---------------------------------------------------------------------------
 
@@ -435,6 +436,63 @@ export async function enregistrerPhoto({ donnees, largeur, hauteur }){
   return transaction(["photos"], "readwrite", async magasin => {
     await promesse(magasin("photos").add(photo));
     return photo.cle;
+  });
+}
+
+/**
+ * Remplace la jaquette d'une fiche existante — une photo floue ou mal cadrée
+ * doit pouvoir être refaite. La fiche n'est pas recréée : l'emplacement, l'EAN
+ * et la date de saisie ne bougent pas (I-1), seule `photoCle` change.
+ *
+ * L'ancienne image est effacée du magasin `photos`. C'est la seule suppression
+ * de tout le store : une jaquette n'est pas une donnée métier — I-12 protège
+ * les fiches, pas les images — et laisser s'accumuler des blobs orphelins sur
+ * un téléphone n'est pas tenable.
+ */
+export async function remplacerPhoto(disqueId, { donnees, largeur, hauteur }){
+  const octets = donnees?.size;
+  const nouvelle = validerPhoto({
+    cle: crypto.randomUUID(),
+    donnees,
+    largeur,
+    hauteur,
+    octets: Number.isInteger(octets) ? octets : NaN,
+    dateSaisie: Date.now(),
+  });
+  return transaction(["disques", "photos"], "readwrite", async magasin => {
+    const disques = magasin("disques");
+    const ancien = await promesse(disques.get(disqueId));
+    if (ancien === undefined)
+      throw new ErreurInvariant("I-12", `disque inconnu : ${JSON.stringify(disqueId)}`);
+    validerDisque(ancien);
+    const nouveau = verifierImmuables(ancien, { ...ancien, photoCle: nouvelle.cle });
+    await promesse(magasin("photos").add(nouvelle));
+    await promesse(disques.put(validerDisque(nouveau)));
+    if (ancien.photoCle) await promesse(magasin("photos").delete(ancien.photoCle));
+    return copie(nouveau);
+  });
+}
+
+/**
+ * Corrige la quantité d'une fiche. Un test de scan répété laisse une fiche à
+ * quatre exemplaires qu'il faut pouvoir ramener à un.
+ * La quantité reste au minimum à 1 : écarter un disque se fait par le statut
+ * REBUT, jamais en le ramenant à zéro (I-12).
+ */
+export async function corrigerQuantite(disqueId, quantite){
+  if (!Number.isInteger(quantite) || quantite < 1){
+    throw new ErreurInvariant("I-6",
+      `quantite doit être un entier d'au moins 1 — reçu ${JSON.stringify(quantite)}`);
+  }
+  return transaction(["disques"], "readwrite", async magasin => {
+    const disques = magasin("disques");
+    const ancien = await promesse(disques.get(disqueId));
+    if (ancien === undefined)
+      throw new ErreurInvariant("I-12", `disque inconnu : ${JSON.stringify(disqueId)}`);
+    validerDisque(ancien);
+    const nouveau = verifierImmuables(ancien, { ...ancien, quantite });
+    await promesse(disques.put(validerDisque(nouveau)));
+    return copie(nouveau);
   });
 }
 

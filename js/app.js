@@ -113,9 +113,11 @@ function majBandeau(alerteCapacite = false){
 }
 
 function majBoutons(){
-  const principal = $("btn"), caisses = $("b-caisses"), second = $("b-torche");
-  caisses.hidden = true;
+  const principal = $("btn"), second = $("b-second"), tiers = $("b-tiers");
   second.hidden = true;
+  tiers.hidden = true;
+  $("b-lampe").hidden = !torcheDisponible || mode === "liste";
+
   if (mode === "panneau"){
     principal.textContent = "Ouvrir la caisse";
     second.textContent = "Annuler";
@@ -124,16 +126,21 @@ function majBoutons(){
     principal.textContent = "Photographier la jaquette";
     second.textContent = "Sans photo";
     second.hidden = false;
+  } else if (mode === "reprise"){
+    principal.textContent = "Photographier la jaquette";
+    second.textContent = "Annuler";
+    second.hidden = false;
   } else if (mode === "liste"){
     principal.textContent = "Retour à la saisie";
+    second.textContent = "Exporter";
+    second.hidden = false;
   } else {
-    principal.textContent = "Liste";
-    caisses.textContent = "Caisses";
-    caisses.hidden = false;
-    second.textContent = "Lampe";
-    second.hidden = !torcheDisponible;
+    principal.textContent = "Sans code-barres";
+    second.textContent = "Liste";
+    second.hidden = false;
+    tiers.textContent = "Caisses";
+    tiers.hidden = false;
   }
-  second.classList.remove("active");
 }
 
 function remplirLigne(id, html){
@@ -191,6 +198,7 @@ const dateCourte = t => new Date(t).toLocaleDateString("fr-FR",
   { day: "2-digit", month: "2-digit", year: "2-digit" });
 
 async function ouvrirListe(){
+  nettoyerListe();          // idempotent : un second rendu ne fuit ni observateur ni URL
   mode = "liste";
   enAttente = null;
   $("liste").hidden = false;
@@ -222,6 +230,7 @@ async function ouvrirListe(){
     }
     const entree = document.createElement("div");
     entree.className = "entree";
+    entree.addEventListener("click", () => ouvrirFeuille(d.id));
     entree.innerHTML =
       (d.photoCle
         ? `<img class="vignette" alt="" src="${PIXEL_VIDE}" data-cle="${d.photoCle}">`
@@ -256,7 +265,55 @@ function nettoyerListe(){
   observateurVignettes = null;
   while (urlsListe.length) URL.revokeObjectURL(urlsListe.pop());
   $("liste-corps").innerHTML = "";
+  $("feuille").hidden = true;
+  ficheChoisie = null;
   $("liste").hidden = true;
+}
+
+// ---------------------------------------------------------------------------
+// Actions sur une fiche : refaire la jaquette, corriger la quantité.
+// Le minimum. La fiche détail complète est L4.
+// ---------------------------------------------------------------------------
+
+let ficheChoisie = null;
+
+async function ouvrirFeuille(id){
+  const fiche = (await store.listerDisques()).find(d => d.id === id);
+  if (!fiche) return;
+  ficheChoisie = fiche;
+  $("feuille-tete").innerHTML =
+    `${fiche.caisse}-${String(fiche.position).padStart(3, "0")}
+     <small>${fiche.ean ?? "sans code-barres"} · saisi le ${dateCourte(fiche.dateSaisie)}</small>`;
+  majQuantiteFeuille(fiche.quantite);
+  $("feuille").hidden = false;
+}
+
+function majQuantiteFeuille(q){
+  $("f-quantite").textContent = q;
+  // La quantité ne descend pas sous 1 : écarter un disque se fait par le
+  // statut REBUT, pas en le ramenant à zéro (I-12).
+  $("f-moins").disabled = q <= 1;
+}
+
+async function changerQuantite(delta){
+  if (!ficheChoisie) return;
+  const voulue = ficheChoisie.quantite + delta;
+  if (voulue < 1) return;
+  try {
+    ficheChoisie = await store.corrigerQuantite(ficheChoisie.id, voulue);
+    majQuantiteFeuille(ficheChoisie.quantite);
+    await rafraichirListe();
+  } catch (e){
+    signaler("echec");
+  }
+}
+
+/** Recharge la liste en gardant la feuille d'actions ouverte. */
+async function rafraichirListe(){
+  const id = ficheChoisie?.id;
+  const ouverte = !$("feuille").hidden;
+  await ouvrirListe();
+  if (id && ouverte) await ouvrirFeuille(id);
 }
 
 function fermerListe(){
@@ -287,7 +344,31 @@ async function ouvrirPanneau(){
     b.addEventListener("click", () => reprendre(c.code));
     reprise.appendChild(b);
   }
+
+  const courante = $("courante");
+  courante.innerHTML = "";
+  courante.hidden = !caisse;
+  if (caisse){
+    courante.insertAdjacentHTML("beforeend",
+      `<span>En cours : <b>${caisse.code}</b> — ${occupee} disques</span>`);
+    const b = document.createElement("button");
+    b.textContent = `Fermer ${caisse.code}`;
+    b.addEventListener("click", () => fermerLaCaisse());
+    courante.appendChild(b);
+  }
   majBoutons();
+}
+
+/** Ferme la caisse en cours. Elle reste dans les données et peut être reprise. */
+async function fermerLaCaisse(){
+  if (!caisse) return;
+  const code = caisse.code;
+  await store.fermerCaisse(code);
+  caisse = await store.caisseCourante();
+  occupee = caisse ? (await store.listerDisques({ caisse: caisse.code })).length : 0;
+  majBandeau();
+  await ouvrirPanneau();
+  annoncer(`${code} fermée`);
 }
 
 function fermerPanneau(){
@@ -329,8 +410,13 @@ async function reprendre(code){
 
 /** Un code vient d'être accepté par le scanner. */
 async function surLecture(ean){
-  // On consulte la liste : ce n'est pas le moment de saisir.
+  // On consulte la liste, ou on refait une jaquette : ce n'est pas le moment
+  // de saisir un nouveau disque.
   if (mode === "liste") return;
+  if (mode === "reprise"){
+    annoncer("Reprise de jaquette en cours — photographiez ou annulez", true);
+    return;
+  }
 
   if (!caisse){
     // Le cas du tout début de session : un boîtier passe devant l'objectif
@@ -465,6 +551,115 @@ async function rangerSansPhoto(){
   await ranger(enAttente.ean, null);
 }
 
+/** Boîtier sans code-barres lisible : fiche créée sans EAN, avec jaquette. */
+async function sansCodeBarres(){
+  if (!caisse){
+    signaler("echec");
+    annoncer("Ouvrez une caisse avant de saisir", true);
+    await ouvrirPanneau();
+    return;
+  }
+  viderFiche();
+  remplirLigne("l-ean", `<div class="sous">sans code-barres</div>`);
+  enAttente = { ean: null };
+  mode = "jaquette";
+  activerLigne("l-photo");
+  majBoutons();
+  annoncer("Montrez la jaquette");
+}
+
+// ---------------------------------------------------------------------------
+// Reprendre la jaquette d'une fiche existante.
+// La fiche n'est pas recréée : l'emplacement et l'EAN ne bougent pas.
+// ---------------------------------------------------------------------------
+
+let ficheARephotographier = null;
+
+function demarrerReprisePhoto(){
+  if (!ficheChoisie) return;
+  ficheARephotographier = ficheChoisie;
+  nettoyerListe();
+  mode = "reprise";
+  viderFiche();
+  const emp = `${ficheARephotographier.caisse}-${String(ficheARephotographier.position).padStart(3, "0")}`;
+  remplirLigne("l-ean",
+    `<div class="valeur mono">${ficheARephotographier.ean ?? "sans code-barres"}</div>
+     <div class="sous">${emp}</div>`);
+  activerLigne("l-photo");
+  majBoutons();
+  annoncer(`Montrez la jaquette de ${emp}`);
+}
+
+async function terminerReprisePhoto(){
+  const fiche = ficheARephotographier;
+  if (!fiche) return;
+  const emp = `${fiche.caisse}-${String(fiche.position).padStart(3, "0")}`;
+  try {
+    const photo = await capturer($("video"));
+    await store.remplacerPhoto(fiche.id, photo);
+    if (urlVignette) URL.revokeObjectURL(urlVignette);
+    urlVignette = urlDeLaPhoto(photo);
+    remplirLigne("l-photo", vignette(urlVignette, "Jaquette refaite",
+      `${photo.largeur} px · ${Math.round(photo.octets / 1024)} Ko`));
+    signaler("accepte");
+    montrerTampon({ classe: "", cadre: emp, quoi: "Jaquette refaite",
+                    ou: "La fiche et son emplacement n'ont pas bougé" });
+  } catch (e){
+    signaler("echec");
+    montrerTampon({ classe: "echec", cadre: "refusé", quoi: "Jaquette non reprise",
+                    ou: e?.message ?? String(e) });
+  } finally {
+    ficheARephotographier = null;
+    mode = "attente";
+    majBoutons();
+    annoncer("Présentez le code-barres");
+  }
+}
+
+function annulerReprisePhoto(){
+  ficheARephotographier = null;
+  mode = "attente";
+  viderFiche();
+  majBoutons();
+  annoncer("Présentez le code-barres");
+}
+
+// ---------------------------------------------------------------------------
+// Export — la seule sauvegarde disponible tant que L2 n'existe pas.
+// ---------------------------------------------------------------------------
+
+async function exporter(){
+  try {
+    const donnees = await store.exporterTout();
+    const texte = JSON.stringify(donnees, null, 2);
+    const nom = `dvd-stock-${new Date().toISOString().slice(0, 10)}.json`;
+    const blob = new Blob([texte], { type: "application/json" });
+
+    // Sur iPhone, un lien de téléchargement dans une PWA installée ne mène
+    // nulle part : la feuille de partage est le seul chemin fiable.
+    const fichier = new File([blob], nom, { type: "application/json" });
+    if (navigator.canShare?.({ files: [fichier] })){
+      try {
+        await navigator.share({ files: [fichier], title: nom });
+        annoncer(`${donnees.disques.length} fiches exportées`);
+        return;
+      } catch (e){
+        if (e?.name === "AbortError") return;   // partage annulé : ce n'est pas une erreur
+      }
+    }
+    const url = URL.createObjectURL(blob);
+    const lien = document.createElement("a");
+    lien.href = url;
+    lien.download = nom;
+    lien.click();
+    setTimeout(() => URL.revokeObjectURL(url), 30_000);
+    annoncer(`${donnees.disques.length} fiches exportées`);
+  } catch (e){
+    signaler("echec");
+    annoncer("Export impossible — " + (e?.message ?? e), true);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Scanner — caméra allumée pendant toute la session, jamais relancée.
 // ---------------------------------------------------------------------------
@@ -504,17 +699,29 @@ const scanner = creerScanner({
 $("btn").addEventListener("click", () => {
   if (mode === "panneau") creerCaisse();
   else if (mode === "jaquette") photographier();
+  else if (mode === "reprise") terminerReprisePhoto();
   else if (mode === "liste") fermerListe();
-  else ouvrirListe();
+  else sansCodeBarres();
 });
 
-$("b-caisses").addEventListener("click", () => ouvrirPanneau());
-
-$("b-torche").addEventListener("click", async () => {
+$("b-second").addEventListener("click", () => {
   if (mode === "panneau"){ fermerPanneau(); annoncer("Présentez le code-barres"); return; }
   if (mode === "jaquette"){ rangerSansPhoto(); return; }
-  $("b-torche").classList.toggle("active", await scanner.basculerTorche());
+  if (mode === "reprise"){ annulerReprisePhoto(); return; }
+  if (mode === "liste"){ exporter(); return; }
+  ouvrirListe();
 });
+
+$("b-tiers").addEventListener("click", () => ouvrirPanneau());
+
+$("b-lampe").addEventListener("click", async () => {
+  $("b-lampe").classList.toggle("active", await scanner.basculerTorche());
+});
+
+$("f-photo").addEventListener("click", () => demarrerReprisePhoto());
+$("f-moins").addEventListener("click", () => changerQuantite(-1));
+$("f-plus").addEventListener("click", () => changerQuantite(+1));
+$("f-fermer").addEventListener("click", () => { $("feuille").hidden = true; ficheChoisie = null; });
 
 // ---------------------------------------------------------------------------
 // Démarrage

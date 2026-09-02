@@ -62,7 +62,9 @@ body{
 /* ---------- bandeau permanent ---------- */
 .session{
   background:var(--petrol);color:var(--card);
-  padding:10px 16px 11px;
+  /* La page occupe toute la hauteur sous la barre d'état (viewport-fit=cover) :
+     sans cette marge, le bandeau passe sous l'îlot dynamique de l'iPhone. */
+  padding:calc(10px + env(safe-area-inset-top)) 16px 11px;
   display:flex;align-items:baseline;gap:14px;
   flex-shrink:0;
 }
@@ -103,6 +105,16 @@ body{
 .reticule span:nth-child(4){bottom:-3px;right:-3px;border-left:0;border-top:0}
 .viseur.verrouille .reticule{border-color:var(--valid)}
 .viseur.verrouille .reticule span{border-color:var(--valid)}
+/* La lampe est une commande de caméra : sa place est dans le viseur,
+   pas dans la barre d'action où elle disputait la place aux actions. */
+.lampe{
+  position:absolute;top:10px;right:10px;
+  width:40px;height:40px;border:0;cursor:pointer;
+  background:rgba(11,33,31,.55);color:var(--card);
+  font-size:19px;line-height:1;
+}
+.lampe.active{background:var(--card);color:var(--petrol)}
+
 .hint{
   position:absolute;bottom:10px;left:0;right:0;text-align:center;
   color:#CFE0DC;font-size:13.5px;letter-spacing:.01em;
@@ -237,6 +249,48 @@ body{
   border-bottom:1px solid var(--line);
   position:sticky;top:0;
 }
+
+/* caisse en cours, dans le panneau */
+.courante{
+  border-top:1px solid var(--line);padding-top:13px;margin-top:2px;
+  display:flex;align-items:center;gap:10px;
+}
+.courante span{flex:1;font-size:15px}
+.courante b{font-family:var(--mono);font-weight:500}
+.courante button{
+  font-family:inherit;font-size:15px;padding:9px 15px;
+  border:1px solid var(--stamp);background:var(--card);color:var(--stamp);cursor:pointer;
+}
+.courante button:active{background:var(--stamp);color:var(--card)}
+
+/* actions sur une fiche de la liste */
+.entree{cursor:pointer}
+.entree:active{background:var(--paper)}
+.feuille{
+  position:absolute;left:0;right:0;bottom:0;
+  background:var(--card);border-top:1px solid var(--line);
+  box-shadow:0 -12px 30px rgba(11,33,31,.18);
+  padding:14px 15px calc(14px + env(safe-area-inset-bottom));
+  display:flex;flex-direction:column;gap:10px;
+}
+.feuille-tete{font-family:var(--mono);font-size:19px;font-weight:500;letter-spacing:.02em}
+.feuille-tete small{
+  display:block;font-family:var(--texte);font-size:13.5px;
+  color:var(--mute);letter-spacing:0;margin-top:3px;
+}
+.compteur-quantite{
+  display:flex;align-items:center;gap:12px;
+  border:1px solid var(--line);padding:8px 12px;
+}
+.compteur-quantite span{flex:1;font-size:15px;color:var(--mute)}
+.compteur-quantite b{font-family:var(--mono);font-size:21px;font-weight:500;min-width:2ch;text-align:center}
+.compteur-quantite button{
+  width:42px;height:42px;border:1px solid var(--line);
+  background:var(--paper);color:var(--petrol);
+  font-family:inherit;font-size:21px;line-height:1;cursor:pointer;
+}
+.compteur-quantite button:active{background:var(--line)}
+.compteur-quantite button[disabled]{opacity:.35;cursor:default}
 
 /* ---------- action ---------- */
 .action{padding:0 12px 12px;flex-shrink:0;display:flex;gap:8px}

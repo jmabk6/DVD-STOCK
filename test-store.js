@@ -78,6 +78,9 @@ class FauxMagasin {
       return valeur[this.cheminCle];
     });
   }
+  delete(cle){
+    return this.suivre(() => { this.donnees.delete(cle); return undefined; });
+  }
 }
 
 class FauxTransaction {
@@ -353,6 +356,78 @@ async function testI6(){
 }
 
 // ===========================================================================
+// Corrections — refaire une jaquette ratée, corriger une quantité fausse.
+// Ni l'une ni l'autre ne recrée la fiche : l'emplacement ne bouge pas (I-1).
+// ===========================================================================
+async function testCorrections(){
+  const { store, base } = await storeNeuf();
+  const image = octets => new Blob([new Uint8Array(octets)], { type: "image/jpeg" });
+  const photos = () => base.magasins.get("photos").donnees.size;
+
+  await store.ouvrirCaisse(10);
+  const cle1 = await store.enregistrerPhoto({ donnees: image(20_000), largeur: 400, hauteur: 225 });
+  const { disque } = await store.ajouterDisque({ ean: EAN_A, photoCle: cle1 });
+  egal(photos(), 1, "corrections : une jaquette en base");
+
+  // Reprendre la photo : la fiche est la même, l'image change.
+  const refait = await store.remplacerPhoto(disque.id, { donnees: image(31_000), largeur: 400, hauteur: 225 });
+  egal([refait.id, refait.caisse, refait.position], [disque.id, disque.caisse, disque.position],
+    "corrections : la fiche n'est pas recréée, l'emplacement ne bouge pas");
+  egal(refait.dateSaisie, disque.dateSaisie, "corrections : la date de saisie ne bouge pas");
+  egal(refait.ean, EAN_A, "corrections : l'EAN ne bouge pas");
+  verifier(refait.photoCle !== cle1, "corrections : photoCle a changé");
+  egal((await store.chercherParEan(EAN_A)).photoCle, refait.photoCle,
+    "corrections : la fiche relue porte la nouvelle clé");
+  egal((await store.lirePhoto(refait.photoCle)).octets, 31_000,
+    "corrections : la nouvelle jaquette est bien celle qu'on a fournie");
+
+  // L'ancienne image est effacée : pas de blob orphelin sur le téléphone.
+  egal(photos(), 1, "corrections : une seule jaquette reste après remplacement");
+  egal(await store.lirePhoto(cle1), null, "corrections : l'ancienne jaquette a disparu");
+
+  // Refaire trois fois n'accumule rien.
+  let courante = refait;
+  for (let i = 0; i < 3; i++){
+    courante = await store.remplacerPhoto(disque.id, { donnees: image(12_000 + i), largeur: 400, hauteur: 225 });
+  }
+  egal(photos(), 1, "corrections : trois remplacements ne laissent qu'une image");
+
+  // Une fiche sans jaquette peut en recevoir une.
+  const { disque: nu } = await store.ajouterDisque({ ean: EAN_B });
+  egal(nu.photoCle, null, "corrections : fiche créée sans jaquette");
+  const habille = await store.remplacerPhoto(nu.id, { donnees: image(15_000), largeur: 400, hauteur: 225 });
+  verifier(typeof habille.photoCle === "string", "corrections : une fiche nue reçoit une jaquette");
+  egal(photos(), 2, "corrections : deux jaquettes pour deux fiches");
+
+  // I-11 tient sur le remplacement comme sur la création.
+  await leve("I-11", () => store.remplacerPhoto(disque.id, { donnees: image(900_000), largeur: 1280, hauteur: 720 }),
+    "corrections : une pleine résolution est refusée au remplacement aussi");
+  egal(photos(), 2, "corrections : un remplacement refusé n'écrit rien");
+
+  await leve("I-12", () => store.remplacerPhoto("inconnu", { donnees: image(1000), largeur: 400, hauteur: 225 }),
+    "corrections : remplacer la jaquette d'une fiche inconnue est refusé");
+
+  // Corriger la quantité — le cas du test de scan répété.
+  for (let i = 0; i < 3; i++) await store.ajouterDisque({ ean: EAN_A });
+  egal((await store.chercherParEan(EAN_A)).quantite, 4, "corrections : quantité montée à 4 par des relectures");
+  const corrige = await store.corrigerQuantite(disque.id, 1);
+  egal(corrige.quantite, 1, "corrections : quantité ramenée à 1");
+  egal([corrige.caisse, corrige.position], [disque.caisse, disque.position],
+    "corrections : corriger la quantité ne déplace pas la fiche");
+  egal((await store.chercherParEan(EAN_A)).quantite, 1, "corrections : la correction est persistée");
+
+  // Zéro et flottants refusés : écarter un disque se fait par le statut.
+  await leve("I-6", () => store.corrigerQuantite(disque.id, 0), "corrections : quantité 0 refusée");
+  await leve("I-6", () => store.corrigerQuantite(disque.id, -2), "corrections : quantité négative refusée");
+  await leve("I-6", () => store.corrigerQuantite(disque.id, 1.5), "corrections : quantité flottante refusée");
+  await leve("I-12", () => store.corrigerQuantite("inconnu", 2), "corrections : fiche inconnue refusée");
+  egal((await store.chercherParEan(EAN_A)).quantite, 1, "corrections : aucun refus n'a modifié la fiche");
+
+  // Et rien n'a disparu côté fiches.
+  egal((await store.listerDisques()).length, 2, "corrections : les deux fiches sont toujours là");
+}
+
+// ===========================================================================
 // I-12 — rien n'est supprimé physiquement
 // ===========================================================================
 async function testI12(){
@@ -361,17 +436,25 @@ async function testI12(){
   // Aucune fonction de suppression n'est exposée.
   const api = Object.keys(store).filter(n => typeof store[n] === "function").sort();
   egal(api, ["ajouterDisque", "caisseCourante", "chercherParEan", "compterSession",
-             "enregistrerPhoto", "exporterTout", "fermerCaisse", "lirePhoto",
-             "listerCaisses", "listerDisques", "ouvrirCaisse", "rouvrirCaisse"],
-    "I-12 : l'API est exactement les douze fonctions prévues");
+             "corrigerQuantite", "enregistrerPhoto", "exporterTout", "fermerCaisse",
+             "lirePhoto", "listerCaisses", "listerDisques", "ouvrirCaisse",
+             "remplacerPhoto", "rouvrirCaisse"],
+    "I-12 : l'API est exactement les quatorze fonctions prévues");
   verifier(!api.some(n => /suppr|efface|retire|delete|remove/i.test(n)),
     "I-12 : aucune fonction de suppression exposée");
 
-  // Ni appel de suppression sur la base.
+  // Une seule suppression est tolérée dans tout le store : celle d'une jaquette
+  // remplacée. Une jaquette n'est pas une donnée métier. Toute autre — sur les
+  // fiches, les caisses, la méta — doit rester impossible.
   const source = readFileSync(join(RACINE, "js", "store.js"), "utf8");
-  const suppressions = source.match(/\.(delete|clear)\s*\(/g) || [];
-  verifier(suppressions.length === 0,
-    `I-12 : store.js ne doit appeler ni delete ni clear (trouvé : ${suppressions.join(", ")})`);
+  const lignes = source.split("\n");
+  const suppressions = lignes
+    .map((l, i) => ({ ligne: i + 1, texte: l.trim() }))
+    .filter(l => /\.(delete|clear)\s*\(/.test(l.texte));
+  const horsPhotos = suppressions.filter(l => !/magasin\("photos"\)/.test(l.texte));
+  verifier(horsPhotos.length === 0,
+    `I-12 : seule une suppression sur le magasin photos est permise (trouvé : ${horsPhotos.map(l => l.ligne + " » " + l.texte).join(" | ")})`);
+  verifier(!/\.clear\s*\(/.test(source), "I-12 : store.js n'appelle jamais clear");
 
   // Et rien ne disparaît en pratique.
   await store.ouvrirCaisse(3);
@@ -576,6 +659,7 @@ const suites = [
   ["I-3  doublons", testI3],
   ["I-6  centimes entiers", testI6],
   ["I-11 jaquette réduite avant écriture", testI11],
+  ["     corrections jaquette et quantité", testCorrections],
   ["I-12 aucune suppression", testI12],
   ["      caisses et emplacements", testCaisses],
   ["API  contrôles complémentaires", testApi],

@@ -9,7 +9,7 @@
 // │ de servir la version en cache indéfiniment, pendant que le dépôt      │
 // │ avance. La panne est silencieuse et pénible à diagnostiquer.          │
 // └──────────────────────────────────────────────────────────────────────┘
-const VERSION = "dvd-stock-v5";
+const VERSION = "dvd-stock-v6";
 
 // Chemins relatifs à la portée du service worker : l'application marche
 // aussi bien à la racine que sous /DVD-STOCK/ sur GitHub Pages.

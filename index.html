@@ -29,6 +29,7 @@
   <div class="viseur" id="viseur">
     <video id="video" playsinline muted autoplay></video>
     <div class="reticule"><span></span><span></span><span></span><span></span></div>
+    <button class="lampe" id="b-lampe" hidden aria-label="Lampe">☀</button>
     <div class="hint" id="hint">Initialisation…</div>
   </div>
 
@@ -56,6 +57,7 @@
         <input id="capacite" type="number" inputmode="numeric" min="1" step="1" value="40">
       </div>
       <div class="reprise" id="reprise"></div>
+      <div class="courante" id="courante" hidden></div>
     </div>
   </div>
 
@@ -64,14 +66,28 @@
   <div class="liste" id="liste" hidden>
     <div class="liste-tete" id="liste-tete">…</div>
     <div class="liste-corps" id="liste-corps"></div>
+
+    <!-- Actions sur une fiche. Le minimum : refaire la jaquette, corriger la
+         quantité. La fiche détail complète est L4. -->
+    <div class="feuille" id="feuille" hidden>
+      <div class="feuille-tete" id="feuille-tete"></div>
+      <button class="btn" id="f-photo">Reprendre la photo</button>
+      <div class="compteur-quantite">
+        <span>Quantité</span>
+        <button id="f-moins" aria-label="Diminuer">−</button>
+        <b id="f-quantite">1</b>
+        <button id="f-plus" aria-label="Augmenter">+</button>
+      </div>
+      <button class="btn discret" id="f-fermer">Fermer</button>
+    </div>
   </div>
 
   </div><!-- /corps-ecran -->
 
   <div class="action">
     <button class="btn" id="btn">Ouvrir une caisse</button>
-    <button class="btn discret" id="b-caisses" hidden>Caisses</button>
-    <button class="btn discret" id="b-torche" hidden>Lampe</button>
+    <button class="btn discret" id="b-second" hidden>Liste</button>
+    <button class="btn discret" id="b-tiers" hidden>Caisses</button>
   </div>
 
 </div>
